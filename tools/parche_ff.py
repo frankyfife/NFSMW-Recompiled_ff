@@ -55,6 +55,22 @@ src/graphics/d3d12/command_processor.cpp
 
 src/kernel/xboxkrnl/xboxkrnl_video.cpp
     Con log_guest_fps, el ritmo de VdSwap visto desde el guest (diagnostico).
+
+include/rex/ui/presenter.h
+src/ui/presenter.cpp
+    present_ui_with_guest_frames: un present por fotograma del juego. La
+    notificacion de logros es un dialogo de ImGui registrado siempre, y con
+    cualquier dialogo el hilo de UI repintaba en cada vblank ADEMAS de en cada
+    fotograma: MEDIDO 180 presents/s para 60 imagenes en un monitor de 120 Hz.
+    Eso deja a G-Sync/FreeSync fuera de rango (tearing aunque este activo) y
+    con vsync reparte las imagenes entre refrescos a trompicones. Ahora la UI
+    se repinta con las imagenes del juego y solo vuelve a su ritmo propio si
+    el juego deja de entregar durante 100 ms (cargas).
+    Va DESPUES de parche_presentador.py: el bloque de d3d12_presenter.cpp se
+    ancla en su Present.
+
+src/ui/d3d12/d3d12_presenter.cpp
+    Con log_guest_fps, presents por segundo en el log ([present]).
 """
 
 import os
@@ -143,6 +159,42 @@ BLOQUES = [
      'xboxkrnl/xboxkrnl_video.cpp #1',
      '                  mapped_u32 height) {\n  // All of these parameters are REQUIRED.\n',
      '                  mapped_u32 height) {\n  // PARCHE LOCAL - ritmo de VdSwap visto desde el guest (diagnostico, con\n  // log_guest_fps). Compararlo con el del procesador de comandos dice si los\n  // tirones los mete el juego o los mete la emulacion de la GPU.\n  static bool log_fps = rex::cvar::GetFlagInfo("log_guest_fps") != nullptr;\n  if (log_fps && rex::cvar::Query<bool>("log_guest_fps")) {\n    using clk = std::chrono::steady_clock;\n    static clk::time_point window_start{}, last{};\n    static uint32_t swaps = 0, over25 = 0, over50 = 0;\n    static double min_ms = 1e9, max_ms = 0.0;\n    const auto now = clk::now();\n    if (window_start == clk::time_point{}) window_start = now;\n    if (last != clk::time_point{}) {\n      const double ms = std::chrono::duration<double, std::milli>(now - last).count();\n      min_ms = std::min(min_ms, ms);\n      max_ms = std::max(max_ms, ms);\n      over25 += ms > 25.0;\n      over50 += ms > 50.0;\n    }\n    last = now;\n    ++swaps;\n    const double win = std::chrono::duration<double>(now - window_start).count();\n    if (win >= 10.0) {\n      REXKRNL_INFO("[VdSwap fps] {:.1f} swaps/s | frame {:.1f}-{:.1f} ms | >25ms {} | >50ms {}",\n                   swaps / win, min_ms, max_ms, over25, over50);\n      window_start = now;\n      swaps = over25 = over50 = 0;\n      min_ms = 1e9;\n      max_ms = 0.0;\n    }\n  }\n\n  // All of these parameters are REQUIRED.\n'),
+    ('include/rex/ui/presenter.h',
+     'ui/presenter.h #1',
+     '  bool guest_output_active_last_refresh_ = false;\n\n',
+     '  bool guest_output_active_last_refresh_ = false;\n  // PARCHE LOCAL - un present por fotograma del guest. Momento (steady_clock,\n  // en ms) del ultimo RefreshGuestOutput; mientras el guest siga entregando\n  // imagenes, la UI se repinta con ellas y no por su cuenta en cada vblank.\n  std::atomic<int64_t> guest_output_last_refresh_ms_{0};\n  // La UI queria repintarse pero se dejo para el siguiente fotograma del guest.\n  std::atomic<bool> ui_paint_deferred_{false};\n  bool IsGuestOutputFlowing() const;\n\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #1',
+     '#include <cctype>\n#include <utility>\n',
+     '#include <cctype>\n#include <chrono>\n#include <utility>\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #2',
+     '                    "Allow presentation from non-UI thread");\n\n',
+     '                    "Allow presentation from non-UI thread");\n\n// PARCHE LOCAL - un present por fotograma del guest\n// Con cualquier dialogo de ImGui registrado (y la notificacion de logros lo\n// esta siempre) el hilo de UI repintaba en cada vblank del monitor ademas de en\n// cada fotograma del guest: 120-300 presents por segundo para 60 imagenes. Eso\n// saca a G-Sync/FreeSync de su rango (tearing) y, con vsync, reparte las\n// imagenes del guest entre refrescos de forma irregular (tirones).\nREXCVAR_DEFINE_BOOL(present_ui_with_guest_frames, true, "UI/Presenter",\n                    "Mientras el juego entregue imagenes, repintar la UI solo "\n                    "con ellas (un present por fotograma del juego)");\n\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #3',
+     '    if (request_ui_paint_after_current_ui_thread_paint_ && !ui_drawers_.empty()) {\n      request_repaint_at_tick = true;\n    }\n',
+     '    if (request_ui_paint_after_current_ui_thread_paint_ && !ui_drawers_.empty()) {\n      if (IsGuestOutputFlowing()) {\n        // El siguiente fotograma del guest repinta la UI; si no llega, el hilo\n        // de ticks lo pide en cuanto el guest deje de entregar.\n        ui_paint_deferred_.store(true, std::memory_order_relaxed);\n      } else {\n        request_repaint_at_tick = true;\n      }\n    }\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #4',
+     '    guest_output_mailbox_writable_ = (3 - last_acquired - guest_output_mailbox_writable_) % 3;\n  }\n\n  // Trigger the presentation on the host.\n',
+     '    guest_output_mailbox_writable_ = (3 - last_acquired - guest_output_mailbox_writable_) % 3;\n  }\n\n  guest_output_last_refresh_ms_.store(\n      std::chrono::duration_cast<std::chrono::milliseconds>(\n          std::chrono::steady_clock::now().time_since_epoch())\n          .count(),\n      std::memory_order_relaxed);\n\n  // Trigger the presentation on the host.\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #5',
+     "  if (!ui_drawers_.empty() && paint_mode_ != PaintMode::kNone) {\n    // The window must be present, otherwise the conditions wouldn't have been\n",
+     "  if (!ui_drawers_.empty() && paint_mode_ != PaintMode::kNone) {\n    if (IsGuestOutputFlowing()) {\n      ui_paint_deferred_.store(true, std::memory_order_relaxed);\n      return;\n    }\n    // The window must be present, otherwise the conditions wouldn't have been\n"),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #6',
+     '    window_->RequestPaint();\n  }\n}\n\n',
+     '    window_->RequestPaint();\n  }\n}\n\nbool Presenter::IsGuestOutputFlowing() const {\n  if (!REXCVAR_GET(present_ui_with_guest_frames)) {\n    return false;\n  }\n  // Hasta 100 ms sin imagen nueva se sigue considerando que el guest entrega\n  // (cubre 10 fps); pasado eso la UI vuelve a repintarse sola en cada vblank\n  // para que un menu siga vivo aunque el juego este cargando.\n  const int64_t ultimo = guest_output_last_refresh_ms_.load(std::memory_order_relaxed);\n  if (ultimo == 0) {\n    return false;\n  }\n  const int64_t ahora = std::chrono::duration_cast<std::chrono::milliseconds>(\n                            std::chrono::steady_clock::now().time_since_epoch())\n                            .count();\n  return ahora - ultimo < 100;\n}\n\n'),
+    ('src/ui/presenter.cpp',
+     'ui/presenter.cpp #7',
+     '    dxgi_ui_tick_signal_condition_.notify_all();\n  }\n',
+     '    dxgi_ui_tick_signal_condition_.notify_all();\n    // PARCHE LOCAL - un present por fotograma del guest: si la UI aplazo su\n    // repintado esperando al guest y este ha dejado de entregar imagenes, se\n    // pide aqui. Sin el mutex de ticks tomado, porque RefreshGuestOutput toma\n    // primero paint_mode_mutex_ y luego el de ticks.\n    if (ui_paint_deferred_.load(std::memory_order_relaxed) && !IsGuestOutputFlowing()) {\n      dxgi_ui_tick_lock.unlock();\n      {\n        std::lock_guard<std::mutex> paint_mode_lock(paint_mode_mutex_);\n        if (paint_mode_ == PaintMode::kUIThreadOnRequest &&\n            ui_paint_deferred_.exchange(false, std::memory_order_relaxed)) {\n          RequestPaintOrConnectionRecoveryViaWindow(false);\n        }\n      }\n      dxgi_ui_tick_lock.lock();\n    }\n  }\n'),
+    ('src/ui/d3d12/d3d12_presenter.cpp',
+     'd3d12/d3d12_presenter.cpp #1',
+     '  HRESULT present_result = paint_context_.swap_chain->Present(sync_interval, present_flags);\n',
+     '  HRESULT present_result = paint_context_.swap_chain->Present(sync_interval, present_flags);\n  // PARCHE LOCAL - presents por segundo en el log (con log_guest_fps), para\n  // comprobar que hay uno por fotograma del guest.\n  {\n    static bool consultado = false;\n    static bool registrar = false;\n    if (!consultado) {\n      consultado = true;\n      registrar = rex::cvar::GetFlagInfo("log_guest_fps") != nullptr &&\n                  rex::cvar::Query<bool>("log_guest_fps");\n    }\n    if (registrar) {\n      using Reloj = std::chrono::steady_clock;\n      static Reloj::time_point inicio = Reloj::now();\n      static Reloj::time_point previo = inicio;\n      static uint32_t cuenta = 0;\n      static double min_ms = 1e9, max_ms = 0.0;\n      const auto ahora = Reloj::now();\n      if (cuenta != 0) {\n        const double ms = std::chrono::duration<double, std::milli>(ahora - previo).count();\n        min_ms = std::min(min_ms, ms);\n        max_ms = std::max(max_ms, ms);\n      }\n      previo = ahora;\n      ++cuenta;\n      const double transcurrido = std::chrono::duration<double>(ahora - inicio).count();\n      if (transcurrido >= 10.0) {\n        REXLOG_INFO("[present] {:.1f}/s | intervalo {:.1f}-{:.1f} ms | vsync {}",\n                    cuenta / transcurrido, min_ms, max_ms, con_vsync);\n        inicio = ahora;\n        cuenta = 0;\n        min_ms = 1e9;\n        max_ms = 0.0;\n      }\n    }\n  }\n'),
 ]
 
 

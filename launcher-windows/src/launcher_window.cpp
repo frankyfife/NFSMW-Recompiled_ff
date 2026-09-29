@@ -396,7 +396,7 @@ QWidget* LauncherWindow::buildContent() {
   cr->addWidget(fpsNote_, 1);
   frame->addRow(QStringLiteral("Custom fps"), customRow);
   vsync_ = new ToggleSwitch(
-      QStringLiteral("V-Sync (no tearing, slight judder; G-Sync/FreeSync is better)"));
+      QStringLiteral("V-Sync (leave off with G-Sync/FreeSync)"));
   frame->addWide(vsync_);
   connect(fps_, &Segmented::currentIndexChanged, this, onChange);
   connect(customFps_, &QSpinBox::valueChanged, this, onChange);
