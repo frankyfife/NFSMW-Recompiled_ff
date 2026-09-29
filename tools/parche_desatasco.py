@@ -146,8 +146,8 @@ NUEVO = """u32 XMAGetOutputBufferWriteOffset_entry(mapped_void context_ptr) {
 
       if (atascado) {
         REXAPU_WARN(
-            "[desatasco] ctx={:08X} lleva {} ms girando sin entrada "
-            "(escritura={} lectura={}). Le digo que el buffer esta terminado.",
+            "[unstall] ctx={:08X} has been spinning for {} ms without input "
+            "(write={} read={}). Telling it the buffer is finished.",
             direccion, llevo, uint32_t(context.output_buffer_write_offset),
             uint32_t(context.output_buffer_read_offset));
 

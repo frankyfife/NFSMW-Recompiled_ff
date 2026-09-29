@@ -153,7 +153,7 @@ void aplicar_velocidad_del_juego() {
   const double por_ciento = REXCVAR_GET(game_speed);
   const double escala = std::max(por_ciento, 0.1) / 100.0;
   rex::chrono::Clock::set_guest_time_scalar(escala);
-  REXSYS_INFO("[velocidad] el tiempo del juego pasa al {:.0f}% (escala x{:.3f})", por_ciento,
+  REXSYS_INFO("[speed] in-game time runs at {:.0f}% (scale x{:.3f})", por_ciento,
               escala);
 }
 

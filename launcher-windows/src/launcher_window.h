@@ -30,7 +30,9 @@ class LauncherWindow final : public QMainWindow {
 
   // UI.
   QWidget* buildContent();
+  QWidget* buildAdvanced();
   QWidget* buildFooter();
+  void resetAdvanced();
   void refresh();
   void refreshGameStatus();
   void refreshCache();
@@ -95,6 +97,18 @@ class LauncherWindow final : public QMainWindow {
   Segmented* edram_ = nullptr;
   ToggleSwitch* asyncShaders_ = nullptr;
   QLabel* cacheNote_ = nullptr;
+
+  // Advanced tab.
+  ToggleSwitch* pacingAtGuest_ = nullptr;
+  ToggleSwitch* lowLatency_ = nullptr;
+  QSpinBox* smoothMs_ = nullptr;
+  Segmented* displayLock_ = nullptr;
+  ToggleSwitch* presentPerFrame_ = nullptr;
+  ToggleSwitch* textureHeaps_ = nullptr;
+  QSpinBox* textureSoft_ = nullptr;
+  QSpinBox* textureHard_ = nullptr;
+  ToggleSwitch* logStats_ = nullptr;
+  ToggleSwitch* logBreakdown_ = nullptr;
 
   QPushButton* play_ = nullptr;
   QLabel* status_ = nullptr;

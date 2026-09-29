@@ -26,6 +26,7 @@
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QTextStream>
@@ -225,12 +226,30 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QMainWindow(parent) {
   }
   v->addWidget(hero_);
 
-  auto* scroll = new QScrollArea;
-  scroll->setWidgetResizable(true);
-  scroll->setFrameShape(QFrame::NoFrame);
-  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  scroll->setWidget(buildContent());
-  v->addWidget(scroll, 1);
+  // Two pages: the everyday settings and the advanced ones (latency, texture
+  // cache, diagnostics), switched with the same pill control as the options.
+  auto* tabBar = new QWidget;
+  auto* tb = new QHBoxLayout(tabBar);
+  tb->setContentsMargins(20, 14, 20, 0);
+  auto* tabs = new Segmented({QStringLiteral("General"), QStringLiteral("Advanced")});
+  tabs->setCurrentIndex(0);
+  tb->addWidget(tabs);
+  tb->addStretch();
+  v->addWidget(tabBar);
+
+  const auto page = [](QWidget* content) {
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(content);
+    return scroll;
+  };
+  auto* pages = new QStackedWidget;
+  pages->addWidget(page(buildContent()));
+  pages->addWidget(page(buildAdvanced()));
+  connect(tabs, &Segmented::currentIndexChanged, pages, &QStackedWidget::setCurrentIndex);
+  v->addWidget(pages, 1);
   v->addWidget(buildFooter());
   setCentralWidget(central);
 
@@ -467,6 +486,138 @@ QWidget* LauncherWindow::buildContent() {
   return content;
 }
 
+// Advanced tab: the switches added while hunting latency and stutter. The
+// defaults are the measured best; "Reset" puts them back.
+QWidget* LauncherWindow::buildAdvanced() {
+  auto* content = new QWidget;
+  auto* cols = new QHBoxLayout(content);
+  cols->setContentsMargins(20, 18, 20, 18);
+  cols->setSpacing(16);
+  auto* left = new QVBoxLayout;
+  auto* right = new QVBoxLayout;
+  left->setSpacing(16);
+  right->setSpacing(16);
+  cols->addLayout(left, 1);
+  cols->addLayout(right, 1);
+
+  const auto onChange = [this] { refresh(); };
+  const auto addNote = [](Card* card, const QString& text) {
+    card->grid()->addWidget(note(text), card->grid()->rowCount(), 0, 1, 2);
+  };
+
+  // ---- Latency & frame pacing ----
+  auto* latency = new Card(QStringLiteral("Latency & frame pacing"));
+  pacingAtGuest_ = new ToggleSwitch(QStringLiteral("Pace frames in the game thread"));
+  latency->addWide(pacingAtGuest_);
+  addNote(latency, QStringLiteral(
+                       "The game waits for its turn when it hands over a frame, as on the "
+                       "console, so it cannot queue frames ahead. Measured 50 → 19 ms from "
+                       "frame to screen at 60 fps."));
+  lowLatency_ = new ToggleSwitch(QStringLiteral("Low-latency mode (like NVIDIA Reflex)"));
+  latency->addWide(lowLatency_);
+  addNote(latency, QStringLiteral(
+                       "The game starts the next frame, and reads the controller, only once "
+                       "the previous one is out. Helps most at high frame rates in busy "
+                       "scenes."));
+  smoothMs_ = spin(0, 16);
+  auto* smoothRow = new QWidget;
+  auto* smh = new QHBoxLayout(smoothRow);
+  smh->setContentsMargins(0, 0, 0, 0);
+  smh->addWidget(smoothMs_);
+  smh->addStretch(1);
+  latency->addRow(QStringLiteral("Smoothing (ms)"), smoothRow);
+  addNote(latency, QStringLiteral(
+                       "Every frame is shown the same time after the game releases it, for "
+                       "even frame times. Uses the slowest recent frame, up to this limit. "
+                       "0 = show as soon as possible."));
+  displayLock_ = new Segmented(
+      {QStringLiteral("Never"), QStringLiteral("With V-Sync"), QStringLiteral("Always")});
+  latency->addRow(QStringLiteral("Lock to display"), displayLock_);
+  addNote(latency, QStringLiteral(
+                       "Aligns the frame clock with the monitor's real refresh. Needed with "
+                       "V-Sync; with G-Sync/FreeSync it causes jitter."));
+  presentPerFrame_ = new ToggleSwitch(QStringLiteral("One present per game frame"));
+  latency->addWide(presentPerFrame_);
+  addNote(latency, QStringLiteral(
+                       "Without it the overlay repaints on every monitor refresh: up to 180 "
+                       "presents for 60 frames, which knocks G-Sync/FreeSync out of range."));
+  connect(pacingAtGuest_, &ToggleSwitch::toggled, this, onChange);
+  connect(lowLatency_, &ToggleSwitch::toggled, this, onChange);
+  connect(smoothMs_, &QSpinBox::valueChanged, this, onChange);
+  connect(displayLock_, &Segmented::currentIndexChanged, this, onChange);
+  connect(presentPerFrame_, &ToggleSwitch::toggled, this, onChange);
+  left->addWidget(latency);
+  left->addStretch();
+
+  // ---- Textures ----
+  auto* textures = new Card(QStringLiteral("Texture streaming"));
+  textureHeaps_ = new ToggleSwitch(QStringLiteral("Shared texture heaps"));
+  textures->addWide(textureHeaps_);
+  addNote(textures, QStringLiteral(
+                        "New textures are placed in pre-allocated 64 MB blocks instead of "
+                        "one driver allocation each: 0.04 instead of 0.35 ms per texture, "
+                        "which removes the hitches while the city streams in."));
+  // A spin box alone would leave the grid at its minimum width (the whole card
+  // content ends up centered): give each one a row that stretches.
+  const auto stretched = [](QWidget* w) {
+    auto* row = new QWidget;
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->addWidget(w);
+    h->addStretch(1);
+    return row;
+  };
+  textureSoft_ = spin(64, 4096);
+  textureSoft_->setSingleStep(256);
+  textures->addRow(QStringLiteral("Cache soft limit (MB)"), stretched(textureSoft_));
+  textureHard_ = spin(128, 8192);
+  textureHard_->setSingleStep(256);
+  textures->addRow(QStringLiteral("Cache hard limit (MB)"), stretched(textureHard_));
+  addNote(textures, QStringLiteral(
+                        "Above these the cache drops textures and has to create them again "
+                        "later. A full city run stayed under 400 MB."));
+  connect(textureHeaps_, &ToggleSwitch::toggled, this, onChange);
+  connect(textureSoft_, &QSpinBox::valueChanged, this, onChange);
+  connect(textureHard_, &QSpinBox::valueChanged, this, onChange);
+  right->addWidget(textures);
+
+  // ---- Diagnostics ----
+  auto* diagnostics = new Card(QStringLiteral("Diagnostics"));
+  logStats_ = new ToggleSwitch(QStringLiteral("Performance statistics in the log"));
+  diagnostics->addWide(logStats_);
+  addNote(diagnostics, QStringLiteral(
+                           "Every 10 s: fps, frame times, latency, texture cache and a line "
+                           "for every late frame. Costs next to nothing."));
+  logBreakdown_ = new ToggleSwitch(QStringLiteral("Break slow frames down by stage"));
+  diagnostics->addWide(logBreakdown_);
+  addNote(diagnostics, QStringLiteral(
+                           "Shaders, textures, render targets, GPU waits… Costs 2-3 ms per "
+                           "frame in busy scenes, so only for hunting a problem."));
+  auto* reset = new QPushButton(QStringLiteral("Reset advanced settings"));
+  diagnostics->addWide(reset);
+  connect(logStats_, &ToggleSwitch::toggled, this, onChange);
+  connect(logBreakdown_, &ToggleSwitch::toggled, this, onChange);
+  connect(reset, &QPushButton::clicked, this, &LauncherWindow::resetAdvanced);
+  right->addWidget(diagnostics);
+  right->addStretch();
+
+  return content;
+}
+
+void LauncherWindow::resetAdvanced() {
+  pacingAtGuest_->setChecked(true);
+  lowLatency_->setChecked(true);
+  smoothMs_->setValue(6);
+  displayLock_->setCurrentIndex(1);
+  presentPerFrame_->setChecked(true);
+  textureHeaps_->setChecked(true);
+  textureSoft_->setValue(2048);
+  textureHard_->setValue(4096);
+  logStats_->setChecked(true);
+  logBreakdown_->setChecked(false);
+  refresh();
+}
+
 QWidget* LauncherWindow::buildFooter() {
   auto* footer = new QFrame;
   footer->setObjectName(QStringLiteral("footer"));
@@ -542,6 +693,17 @@ void LauncherWindow::loadSettings() {
   edram_->setCurrentIndex(
       std::max<qsizetype>(0, kEdramValues.indexOf(s.value("renderer/edram", "auto").toString())));
   asyncShaders_->setChecked(s.value("renderer/async_shaders", true).toBool());
+
+  pacingAtGuest_->setChecked(s.value("advanced/pacing_at_guest", true).toBool());
+  lowLatency_->setChecked(s.value("advanced/low_latency", true).toBool());
+  smoothMs_->setValue(s.value("advanced/smooth_ms", 6).toInt());
+  displayLock_->setCurrentIndex(std::clamp(s.value("advanced/display_lock", 1).toInt(), 0, 2));
+  presentPerFrame_->setChecked(s.value("advanced/present_per_frame", true).toBool());
+  textureHeaps_->setChecked(s.value("advanced/texture_heaps", true).toBool());
+  textureSoft_->setValue(s.value("advanced/texture_soft_mb", 2048).toInt());
+  textureHard_->setValue(s.value("advanced/texture_hard_mb", 4096).toInt());
+  logStats_->setChecked(s.value("advanced/log_stats", true).toBool());
+  logBreakdown_->setChecked(s.value("advanced/log_breakdown", false).toBool());
 }
 
 void LauncherWindow::saveSettings() const {
@@ -567,6 +729,16 @@ void LauncherWindow::saveSettings() const {
   s.setValue("renderer/api", api_->currentIndex() == 1 ? "vulkan" : "d3d12");
   s.setValue("renderer/edram", kEdramValues[edram_->currentIndex()]);
   s.setValue("renderer/async_shaders", asyncShaders_->isChecked());
+  s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
+  s.setValue("advanced/low_latency", lowLatency_->isChecked());
+  s.setValue("advanced/smooth_ms", smoothMs_->value());
+  s.setValue("advanced/display_lock", displayLock_->currentIndex());
+  s.setValue("advanced/present_per_frame", presentPerFrame_->isChecked());
+  s.setValue("advanced/texture_heaps", textureHeaps_->isChecked());
+  s.setValue("advanced/texture_soft_mb", textureSoft_->value());
+  s.setValue("advanced/texture_hard_mb", textureHard_->value());
+  s.setValue("advanced/log_stats", logStats_->isChecked());
+  s.setValue("advanced/log_breakdown", logBreakdown_->isChecked());
   s.sync();
 }
 
@@ -654,12 +826,17 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
 
   a << opt("swap_post_effect", kAaValues[aa_->currentIndex()]);
   a << opt("anisotropic_override", QString::number(kAnisoValues[aniso_->currentIndex()]));
-  // Texture cache limits. The Xenia defaults (384 MB soft, 768 MB hard) are
-  // sized for small GPUs: NFS MW streams the city while driving, the cache
-  // throws textures away at those limits and recreates them when you pass by
-  // again - a texture hitch every few seconds. 2/4 GB fits any current card.
-  a << opt("texture_cache_memory_limit_soft", QStringLiteral("2048"));
-  a << opt("texture_cache_memory_limit_hard", QStringLiteral("4096"));
+  // Advanced tab (see buildAdvanced for what each one does).
+  a << flag("frame_pacing_at_guest", pacingAtGuest_->isChecked());
+  a << flag("frame_pacing_low_latency", lowLatency_->isChecked());
+  a << opt("frame_pacing_smooth_max_ms", QString::number(smoothMs_->value()));
+  a << opt("frame_pacing_display_lock", QString::number(displayLock_->currentIndex()));
+  a << flag("present_ui_with_guest_frames", presentPerFrame_->isChecked());
+  a << flag("d3d12_texture_heaps", textureHeaps_->isChecked());
+  // The Xenia defaults (384/768 MB) are sized for small GPUs.
+  a << opt("texture_cache_memory_limit_soft", QString::number(textureSoft_->value()));
+  a << opt("texture_cache_memory_limit_hard",
+           QString::number(std::max(textureHard_->value(), textureSoft_->value())));
   if (filter_->currentIndex() != 0) {
     a << opt("present_effect", kFilterValues[filter_->currentIndex()]);
   }
@@ -675,8 +852,9 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << QStringLiteral("--unlock_all=%1").arg(unlockAll_->isChecked() ? "true" : "false");
   a << QStringLiteral("--async_shader_compilation=%1")
            .arg(asyncShaders_->isChecked() ? "true" : "false");
-  // One line every 10 s with the frames the game really presents.
-  a << "--log_guest_fps=true";
+  // Every 10 s: frames the game really presents, latency, texture cache.
+  a << flag("log_guest_fps", logStats_->isChecked());
+  a << flag("log_frame_breakdown", logBreakdown_->isChecked());
   return a;
 }
 

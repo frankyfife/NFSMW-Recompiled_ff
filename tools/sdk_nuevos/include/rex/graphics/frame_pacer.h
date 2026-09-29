@@ -66,7 +66,7 @@ inline FramePacerTiming PaceFrame(int32_t fps, bool display_lock, int32_t phase_
                         GetProcAddress(dwm, "DwmGetCompositionTimingInfo"))
                   : nullptr;
     if (!fn) {
-      REXLOG_WARN("[pacing] sin DwmGetCompositionTimingInfo: ritmo con reloj propio");
+      REXLOG_WARN("[pacing] no DwmGetCompositionTimingInfo: pacing with our own clock");
     }
     return fn;
   }();
@@ -82,7 +82,7 @@ inline FramePacerTiming PaceFrame(int32_t fps, bool display_lock, int32_t phase_
     if (SUCCEEDED(hr) && ti.qpcRefreshPeriod > 0 &&
         (refresh == 0 ||
          std::abs(double(ti.qpcRefreshPeriod) - double(refresh)) > double(refresh) * 0.0005)) {
-      REXLOG_INFO("[pacing] refresco del monitor {:.4f} Hz",
+      REXLOG_INFO("[pacing] display refresh {:.4f} Hz",
                   double(freq) / double(ti.qpcRefreshPeriod));
     }
     if (SUCCEEDED(hr) && ti.qpcRefreshPeriod > 0) {

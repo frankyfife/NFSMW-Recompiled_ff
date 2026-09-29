@@ -152,7 +152,7 @@ NUEVO_CVAR = """REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearin
 // El SDK no traia ningun limitador: solo estaba "vsync", y ese ni siquiera
 // tocaba el SyncInterval del Present. Este es nuevo.
 REXCVAR_DEFINE_INT32(max_fps, 0, "UI/Present",
-                     "Limite de fotogramas por segundo (0 = sin limite)")
+                     "Frames per second limit (0 = unlimited)")
     .range(0, 1000);
 """
 

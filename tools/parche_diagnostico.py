@@ -161,20 +161,20 @@ MEM_NUEVO = """    REXSYS_ERROR(
           rex::system::XThread::IsInThread() ? rex::system::XThread::GetCurrentThread() : nullptr;
       if (!hilo) {
         REXSYS_ERROR(
-            "  [hilo guest] no hay XThread en este hilo: el fallo NO viene de "
-            "codigo del juego, sino del propio runtime.");
+            "  [guest thread] no XThread on this thread: the fault does NOT come from "
+            "game code but from the runtime itself.");
       } else {
         const auto* cp = hilo->creation_params();
         REXSYS_ERROR(
-            "  [hilo guest] id=0x{:X} entrada=0x{:08X} contexto=0x{:08X} "
-            "trampolin_xapi=0x{:08X} principal={} creado_por_el_juego={}",
+            "  [guest thread] id=0x{:X} entry=0x{:08X} context=0x{:08X} "
+            "xapi_trampoline=0x{:08X} main={} created_by_game={}",
             hilo->thread_id(), cp->start_address, cp->start_context,
             cp->xapi_thread_startup, hilo->main_thread(), hilo->is_guest_thread());
 
         // Lo que el SDK CREE haber reservado para este hilo. Comparado con
         // r13 mas abajo, esto separa "la reserva fallo" de "el contexto se
         // perdio por el camino".
-        REXSYS_ERROR("  [bloques del hilo] pcr=0x{:08X} tls=0x{:08X}", hilo->pcr_ptr(),
+        REXSYS_ERROR("  [thread blocks] pcr=0x{:08X} tls=0x{:08X}", hilo->pcr_ptr(),
                      hilo->tls_ptr());
 
         auto* estado = hilo->thread_state();
@@ -190,11 +190,11 @@ MEM_NUEVO = """    REXSYS_ERROR(
           // last_indirect_target lo mantiene el SDK aunque ctr se haya
           // optimizado a variable local (REX_CONFIG_CTR_AS_LOCAL).
           REXSYS_ERROR(
-              "  [contexto ppc] r13=0x{:08X} r2=0x{:08X} lr=0x{:08X} "
-              "ultimo_salto_indirecto=0x{:08X} r1=0x{:08X}",
+              "  [ppc context] r13=0x{:08X} r2=0x{:08X} lr=0x{:08X} "
+              "last_indirect_jump=0x{:08X} r1=0x{:08X}",
               c.r13.u32, c.r2.u32, static_cast<uint32_t>(c.lr), c.last_indirect_target, c.r1.u32);
           REXSYS_ERROR(
-              "  [registros] r3=0x{:08X} r4=0x{:08X} r5=0x{:08X} r6=0x{:08X} "
+              "  [registers] r3=0x{:08X} r4=0x{:08X} r5=0x{:08X} r6=0x{:08X} "
               "r7=0x{:08X} r11=0x{:08X} r12=0x{:08X} r30=0x{:08X} r31=0x{:08X}",
               c.r3.u32, c.r4.u32, c.r5.u32, c.r6.u32, c.r7.u32, c.r11.u32, c.r12.u32, c.r30.u32,
               c.r31.u32);
@@ -212,7 +212,7 @@ MEM_NUEVO = """    REXSYS_ERROR(
             // namespace rex::memory, asi que sin cualificar tambien valdria,
             // pero escrito entero es el mismo nombre que usa xthread.cpp y no
             // depende de donde acabe cayendo el bloque si el SDK se reordena.
-            REXSYS_ERROR("  [contenido del pcr] +0x000={:08X} +0x100={:08X}",
+            REXSYS_ERROR("  [pcr contents] +0x000={:08X} +0x100={:08X}",
                          rex::memory::load_and_swap<uint32_t>(p0),
                          rex::memory::load_and_swap<uint32_t>(p100));
           }
@@ -254,7 +254,7 @@ RUIDO_NUEVO = """  } else {
     static std::atomic_flag avisado = ATOMIC_FLAG_INIT;
     if (!avisado.test_and_set(std::memory_order_relaxed)) {
       REXSYS_WARN("Too few processor cores - scheduling will be wonky"
-                  " (este aviso solo se muestra una vez por ejecucion)");
+                  " (this warning is only shown once per run)");
     }
   }
 """
@@ -286,8 +286,8 @@ HILO_NUEVO = """  auto* dispatcher = runtime->function_dispatcher();
   {
     auto* ctx_log = thread_state_ ? thread_state_->context() : nullptr;
     REXSYS_INFO(
-        "[hilo guest] arrancando: entrada=0x{:08X} start_address=0x{:08X} "
-        "contexto=0x{:08X} trampolin_xapi=0x{:08X} pila={} bytes | "
+        "[guest thread] starting: entry=0x{:08X} start_address=0x{:08X} "
+        "context=0x{:08X} xapi_trampoline=0x{:08X} stack={} bytes | "
         "pcr=0x{:08X} tls=0x{:08X} r13=0x{:08X} r1=0x{:08X}",
         address, creation_params_.start_address, creation_params_.start_context,
         creation_params_.xapi_thread_startup, creation_params_.stack_size, pcr_address_,

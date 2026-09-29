@@ -203,9 +203,9 @@ class NfsmwApp : public rex::ReXApp {
                          : nullptr;
     ULONG actual = 0;
     if (set_res && set_res(5000, TRUE, &actual) == 0) {  // 100 ns unidades: 0,5 ms
-      REXLOG_INFO("[temporizador] resolucion {:.2f} ms", actual / 10000.0);
+      REXLOG_INFO("[timer] resolution {:.2f} ms", actual / 10000.0);
     } else {
-      REXLOG_WARN("[temporizador] no se pudo subir la resolucion; Sleep(1) puede durar 15 ms");
+      REXLOG_WARN("[timer] could not raise the resolution; Sleep(1) may take 15 ms");
     }
 #if defined(PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION)
     PROCESS_POWER_THROTTLING_STATE estado = {};
@@ -264,7 +264,7 @@ class NfsmwApp : public rex::ReXApp {
   // ==========================================================================
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     rex::ui::RegisterBind("bind_nfsmw_menu", "Escape",
-                          "Abrir/cerrar menu de ajustes del juego",
+                          "Open/close the game settings menu",
                           [this] { AlternarMenu(); });
   }
 
@@ -280,14 +280,14 @@ class NfsmwApp : public rex::ReXApp {
  private:
   static void PonerSiNadieLoPidio(const char* nombre, const char* valor) {
     if (rex::cvar::GetFlagInfo(nombre) == nullptr) {
-      REXLOG_DEBUG("Ajuste '{}' no registrado todavia; no lo toco.", nombre);
+      REXLOG_DEBUG("Setting '{}' not registered yet; leaving it alone.", nombre);
       return;
     }
     if (rex::cvar::HasNonDefaultValue(nombre)) {
       return;  // lo puso el usuario: no se le lleva la contraria.
     }
     if (rex::cvar::SetFlagByName(nombre, valor)) {
-      REXLOG_DEBUG("Ajuste por defecto de la build portable: {} = {}", nombre, valor);
+      REXLOG_DEBUG("Portable build default: {} = {}", nombre, valor);
     }
   }
 
@@ -407,22 +407,22 @@ class NfsmwApp : public rex::ReXApp {
       if (estado && estado->context()) {
         const auto& c = *estado->context();
         if (grave) {
-          REXLOG_ERROR("[vigilante]   hilo id=0x{:X} entrada=0x{:08X} principal={} corriendo={} | "
+          REXLOG_ERROR("[watchdog]   thread id=0x{:X} entry=0x{:08X} main={} running={} | "
                        "lr=0x{:08X} r1=0x{:08X} r13=0x{:08X} r3=0x{:08X} ctr=0x{:08X} "
-                       "ultimo_indirecto=0x{:08X}",
+                       "last_indirect=0x{:08X}",
                        h->thread_id(), cp->start_address, h->main_thread(), h->is_running(),
                        static_cast<uint32_t>(c.lr), c.r1.u32, c.r13.u32, c.r3.u32, c.ctr.u32,
                        c.last_indirect_target);
         } else {
-          REXLOG_DEBUG("[vigilante]   hilo id=0x{:X} entrada=0x{:08X} principal={} corriendo={} | "
+          REXLOG_DEBUG("[watchdog]   thread id=0x{:X} entry=0x{:08X} main={} running={} | "
                        "lr=0x{:08X} r1=0x{:08X} r13=0x{:08X} r3=0x{:08X} ctr=0x{:08X} "
-                       "ultimo_indirecto=0x{:08X}",
+                       "last_indirect=0x{:08X}",
                        h->thread_id(), cp->start_address, h->main_thread(), h->is_running(),
                        static_cast<uint32_t>(c.lr), c.r1.u32, c.r13.u32, c.r3.u32, c.ctr.u32,
                        c.last_indirect_target);
         }
       } else {
-        REXLOG_DEBUG("[vigilante]   hilo id=0x{:X} entrada=0x{:08X} sin contexto", h->thread_id(),
+        REXLOG_DEBUG("[watchdog]   thread id=0x{:X} entry=0x{:08X} no context", h->thread_id(),
                      cp->start_address);
       }
     }
@@ -500,13 +500,13 @@ class NfsmwApp : public rex::ReXApp {
       // cada diez segundos.
       if (++desde_instantanea >= 10) {
         desde_instantanea = 0;
-        REXLOG_DEBUG("[vigilante] instantanea: {} hilos del juego", hilos.size());
+        REXLOG_DEBUG("[watchdog] snapshot: {} game threads", hilos.size());
         VolcarHilos(hilos, false);
       }
 
       if (firma != firma_anterior) {
         if (avisado) {
-          REXLOG_WARN("[vigilante] el juego ha vuelto a moverse despues de {} s parado.", quietos);
+          REXLOG_WARN("[watchdog] the game is moving again after {} s stalled.", quietos);
           avisado = false;
         }
         firma_anterior = firma;
@@ -521,8 +521,8 @@ class NfsmwApp : public rex::ReXApp {
       if (avisado && desde_ultimo_volcado < kSegundosEntreVolcados) continue;
       desde_ultimo_volcado = 0;
 
-      REXLOG_ERROR("[vigilante] {} s sin que se mueva ni un registro en ninguno de los {} hilos "
-                   "del juego. Esto no es lentitud: esta parado.",
+      REXLOG_ERROR("[watchdog] {} s without a single register changing in any of the {} game "
+                   "threads. This is not slowness: it is stuck.",
                    quietos, hilos.size());
       VolcarHilos(hilos, true);
       avisado = true;
@@ -537,7 +537,7 @@ class NfsmwApp : public rex::ReXApp {
   // tambien la usa en vivo. Ver alli por que es un byte y no un be32.
   void AplicarParcheBlackEdition() {
     if (!REXCVAR_GET(black_edition)) {
-      REXLOG_INFO("[black-edition] desactivado (black_edition=false).");
+      REXLOG_INFO("[black-edition] off (black_edition=false).");
     } else {
       AplicarBlackEdition(true);
     }
@@ -593,13 +593,13 @@ class NfsmwApp : public rex::ReXApp {
         }
         return;
       }
-      REXLOG_ERROR("[menu] no se pudo relanzar el juego (ShellExecuteW = {}); sigue con "
-                   "lo aplicado y reinicia a mano.", int32_t(resultado));
+      REXLOG_ERROR("[menu] could not relaunch the game (ShellExecuteW = {}); keeping "
+                   "what was applied, restart it manually.", int32_t(resultado));
     } else {
-      REXLOG_ERROR("[menu] sin ruta del ejecutable; reinicia el juego a mano.");
+      REXLOG_ERROR("[menu] no executable path; restart the game manually.");
     }
 #else
-    REXLOG_WARN("[menu] reinicia el juego a mano para aplicar los cambios.");
+    REXLOG_WARN("[menu] restart the game manually to apply the changes.");
 #endif
   }
 

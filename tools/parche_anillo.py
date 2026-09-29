@@ -122,7 +122,7 @@ bool XmaDiagToca(std::atomic<int64_t>& ultimo) {
 
 u32 XMAIsInputBuffer0Valid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REX_DIAG_XMA("[guest] pregunta entrada 0: ctx={:08X} -> {}", context_ptr.guest_address(),
+  REX_DIAG_XMA("[guest] queries input 0: ctx={:08X} -> {}", context_ptr.guest_address(),
                uint32_t(context.input_buffer_0_valid));
   return context.input_buffer_0_valid;
 }
@@ -136,7 +136,7 @@ PARES = [
 """,
  """u32 XMAIsOutputBufferValid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REX_DIAG_XMA("[guest] pregunta si la salida vale: ctx={:08X} -> {}", context_ptr.guest_address(),
+  REX_DIAG_XMA("[guest] asks whether output is valid: ctx={:08X} -> {}", context_ptr.guest_address(),
                uint32_t(context.output_buffer_valid));
   return context.output_buffer_valid;
 }
@@ -148,7 +148,7 @@ PARES = [
 """,
  """u32 XMASetOutputBufferValid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REXAPU_DEBUG("[guest] revalida la salida: ctx={:08X}", context_ptr.guest_address());
+  REXAPU_DEBUG("[guest] revalidates output: ctx={:08X}", context_ptr.guest_address());
   context.output_buffer_valid = 1;
 """),
 
@@ -159,7 +159,7 @@ PARES = [
 """,
  """u32 XMAGetOutputBufferReadOffset_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REX_DIAG_XMA("[guest] pide lectura: ctx={:08X} lectura={} escritura={} valida={} ent0={} ent1={}",
+  REX_DIAG_XMA("[guest] requests read: ctx={:08X} read={} write={} valid={} in0={} in1={}",
                context_ptr.guest_address(), uint32_t(context.output_buffer_read_offset),
                uint32_t(context.output_buffer_write_offset),
                uint32_t(context.output_buffer_valid), uint32_t(context.input_buffer_0_valid),
@@ -174,7 +174,7 @@ PARES = [
 """,
  """u32 XMASetOutputBufferReadOffset_entry(mapped_void context_ptr, u32 value) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REXAPU_DEBUG("[guest] mueve la lectura: ctx={:08X} {} -> {}", context_ptr.guest_address(),
+  REXAPU_DEBUG("[guest] moves read offset: ctx={:08X} {} -> {}", context_ptr.guest_address(),
                uint32_t(context.output_buffer_read_offset), value);
   context.output_buffer_read_offset = value;
 """),
@@ -186,7 +186,7 @@ PARES = [
 """,
  """u32 XMAGetOutputBufferWriteOffset_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REX_DIAG_XMA("[guest] pide escritura: ctx={:08X} escritura={} lectura={} valida={} ent0={} ent1={}",
+  REX_DIAG_XMA("[guest] requests write: ctx={:08X} write={} read={} valid={} in0={} in1={}",
                context_ptr.guest_address(), uint32_t(context.output_buffer_write_offset),
                uint32_t(context.output_buffer_read_offset),
                uint32_t(context.output_buffer_valid), uint32_t(context.input_buffer_0_valid),
@@ -202,7 +202,7 @@ PARES = [
 """,
  """u32 XMASetInputBuffer0Valid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REXAPU_DEBUG("[guest] DA ENTRADA 0: ctx={:08X}", context_ptr.guest_address());
+  REXAPU_DEBUG("[guest] GIVES INPUT 0: ctx={:08X}", context_ptr.guest_address());
   context.input_buffer_0_valid = 1;
 """),
 
@@ -213,7 +213,7 @@ PARES = [
 """,
  """u32 XMAIsInputBuffer1Valid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REX_DIAG_XMA("[guest] pregunta entrada 1: ctx={:08X} -> {}", context_ptr.guest_address(),
+  REX_DIAG_XMA("[guest] queries input 1: ctx={:08X} -> {}", context_ptr.guest_address(),
                uint32_t(context.input_buffer_1_valid));
   return context.input_buffer_1_valid;
 }
@@ -225,7 +225,7 @@ PARES = [
 """,
  """u32 XMASetInputBuffer1Valid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
-  REXAPU_DEBUG("[guest] DA ENTRADA 1: ctx={:08X}", context_ptr.guest_address());
+  REXAPU_DEBUG("[guest] GIVES INPUT 1: ctx={:08X}", context_ptr.guest_address());
   context.input_buffer_1_valid = 1;
 """),
 
@@ -233,7 +233,7 @@ PARES = [
   StoreXmaContextIndexedRegister(REX_KERNEL_STATE(), 0x1940, context_ptr.guest_address());
 """,
  """u32 XMAEnableContext_entry(mapped_void context_ptr) {
-  REX_DIAG_XMA("[guest] enciende el contexto: ctx={:08X}", context_ptr.guest_address());
+  REX_DIAG_XMA("[guest] enables context: ctx={:08X}", context_ptr.guest_address());
   StoreXmaContextIndexedRegister(REX_KERNEL_STATE(), 0x1940, context_ptr.guest_address());
 """),
 
@@ -241,21 +241,21 @@ PARES = [
   X_HRESULT result = X_E_SUCCESS;
 """,
  """u32 XMADisableContext_entry(mapped_void context_ptr, u32 wait) {
-  REXAPU_DEBUG("[guest] apaga el contexto: ctx={:08X} esperar={}", context_ptr.guest_address(),
+  REXAPU_DEBUG("[guest] disables context: ctx={:08X} wait={}", context_ptr.guest_address(),
                wait);
   X_HRESULT result = X_E_SUCCESS;
 """),
 ("""u32 XMASetInputBuffer0_entry(mapped_void context_ptr, mapped_void buffer, u32 packet_count) {
 """,
  """u32 XMASetInputBuffer0_entry(mapped_void context_ptr, mapped_void buffer, u32 packet_count) {
-  REXAPU_DEBUG("[guest] ENTREGA BUFFER 0: ctx={:08X} datos={:08X} paquetes={}",
+  REXAPU_DEBUG("[guest] SUBMITS BUFFER 0: ctx={:08X} data={:08X} packets={}",
                context_ptr.guest_address(), buffer.guest_address(), packet_count);
 """),
 
 ("""u32 XMASetInputBuffer1_entry(mapped_void context_ptr, mapped_void buffer, u32 packet_count) {
 """,
  """u32 XMASetInputBuffer1_entry(mapped_void context_ptr, mapped_void buffer, u32 packet_count) {
-  REXAPU_DEBUG("[guest] ENTREGA BUFFER 1: ctx={:08X} datos={:08X} paquetes={}",
+  REXAPU_DEBUG("[guest] SUBMITS BUFFER 1: ctx={:08X} data={:08X} packets={}",
                context_ptr.guest_address(), buffer.guest_address(), packet_count);
 """),
 ]

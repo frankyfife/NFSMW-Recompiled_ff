@@ -155,16 +155,16 @@ NUEVO = """  // ============ PARCHE LOCAL - fallback de GPU y error visible ====
   if (adapter == nullptr && REXCVAR_GET(d3d12_adapter) == -1) {
     // Ninguna GPU fisica sirve. Antes se acababa aqui.
     REXLOG_WARN(
-        "No hay ninguna GPU fisica con Direct3D 12 feature level 11_0. "
-        "Probando el rasterizador por software (WARP).");
+        "No physical GPU with Direct3D 12 feature level 11_0. "
+        "Trying the software rasterizer (WARP).");
     adapter = buscar_adaptador(true);
     if (adapter != nullptr) {
       usando_software = true;
       REXLOG_WARN(
-          "Usando WARP: el render lo hace la CPU. Va a ir MUY lento -unos "
-          "pocos fotogramas por segundo- pero el juego arranca y se ve. "
-          "Actualiza el driver de la GPU para volver a la aceleracion por "
-          "hardware.");
+          "Using WARP: the CPU does the rendering. It will be VERY slow - a "
+          "few frames per second - but the game starts and shows. "
+          "Update the GPU driver to get hardware "
+          "acceleration back.");
     }
   }
 
@@ -187,19 +187,19 @@ NUEVO = """  // ============ PARCHE LOCAL - fallback de GPU y error visible ====
           reinterpret_cast<PFN_MessageBoxW>(GetProcAddress(user32, "MessageBoxW"));
       if (message_box) {
         message_box(nullptr,
-                    L"No se ha encontrado ninguna tarjeta grafica compatible.\\n"
+                    L"No compatible graphics card was found.\\n"
                     L"\\n"
-                    L"Hace falta Direct3D 12 con feature level 11_0. Eso lo\\n"
-                    L"cumple practicamente cualquier GPU de 2012 en adelante,\\n"
-                    L"asi que lo mas probable es que el problema sea el driver.\\n"
+                    L"Direct3D 12 with feature level 11_0 is required. Almost\\n"
+                    L"any GPU from 2012 onwards has it, so the most likely\\n"
+                    L"cause is the graphics driver.\\n"
                     L"\\n"
-                    L"Que probar, por orden:\\n"
-                    L"  1. Actualizar el driver de la tarjeta grafica.\\n"
-                    L"  2. Comprobar que Windows esta al dia.\\n"
-                    L"  3. Si es un portatil con dos graficas, forzar que el\\n"
-                    L"     juego use la dedicada.\\n"
+                    L"What to try, in order:\\n"
+                    L"  1. Update the graphics card driver.\\n"
+                    L"  2. Make sure Windows is up to date.\\n"
+                    L"  3. On a laptop with two GPUs, make the game use\\n"
+                    L"     the dedicated one.\\n"
                     L"\\n"
-                    L"Hay mas detalle en la carpeta logs, junto al ejecutable.",
+                    L"More details are in the logs folder next to the executable.",
                     L"Need for Speed: Most Wanted", 0x00000010 /* MB_ICONERROR */);
       }
       FreeLibrary(user32);
@@ -210,7 +210,7 @@ NUEVO = """  // ============ PARCHE LOCAL - fallback de GPU y error visible ====
   }
 
   if (usando_software) {
-    REXGPU_INFO("Adaptador elegido: WARP (rasterizador por software)");
+    REXGPU_INFO("Adapter chosen: WARP (software rasterizer)");
   }
   // ====================== fin del parche local ============================
 """

@@ -35,8 +35,8 @@
 //  vivo desde el menu: la bandera es un byte que el juego relee cada vez que
 //  la consulta, asi que basta con escribirlo.
 // ---------------------------------------------------------------------------
-REXCVAR_DEFINE_BOOL(black_edition, true, "Contenido",
-                    "Contenido Black Edition: coches de pago como descargables")
+REXCVAR_DEFINE_BOOL(black_edition, true, "Content",
+                    "Black Edition content: the paid cars as downloadable content")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 // La patch de Xenia es  be32 0x82A2CE04 = 0x00000100, es decir, en la memoria
@@ -53,17 +53,17 @@ constexpr uint32_t kBlackEditionByte = 0x82A2CE06u;
 bool AplicarBlackEdition(bool activo) {
   auto* kernel = rex::system::kernel_state();
   if (kernel == nullptr || kernel->memory() == nullptr) {
-    REXLOG_WARN("[black-edition] sin kernel de memoria; no se puede parchear.");
+    REXLOG_WARN("[black-edition] no kernel memory; cannot patch.");
     return false;
   }
   auto* bandera = kernel->memory()->TranslateVirtual<uint8_t*>(kBlackEditionByte);
   if (bandera == nullptr) {
-    REXLOG_WARN("[black-edition] no se pudo traducir 0x{:08X}.", kBlackEditionByte);
+    REXLOG_WARN("[black-edition] could not translate 0x{:08X}.", kBlackEditionByte);
     return false;
   }
   *bandera = activo ? 1 : 0;
   REXLOG_INFO("[black-edition] byte 0x{:08X} = {} ({}).", kBlackEditionByte, *bandera,
-              activo ? "contenido desbloqueado" : "contenido oculto");
+              activo ? "content unlocked" : "content hidden");
   return true;
 }
 
@@ -80,8 +80,8 @@ bool AplicarBlackEdition(bool activo) {
 //  Edition. No toca la partida guardada: con la opcion apagada todo vuelve a
 //  estar como estaba.
 // ---------------------------------------------------------------------------
-REXCVAR_DEFINE_BOOL(unlock_all, false, "Contenido",
-                    "Desbloquearlo todo: coches, piezas, eventos y circuitos ocultos")
+REXCVAR_DEFINE_BOOL(unlock_all, false, "Content",
+                    "Unlock everything: cars, parts, events and hidden tracks")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 constexpr uint32_t kUnlockAllByte = 0x82A2CE00u;
@@ -89,17 +89,17 @@ constexpr uint32_t kUnlockAllByte = 0x82A2CE00u;
 bool AplicarUnlockAll(bool activo) {
   auto* kernel = rex::system::kernel_state();
   if (kernel == nullptr || kernel->memory() == nullptr) {
-    REXLOG_WARN("[unlock-all] sin kernel de memoria; no se puede parchear.");
+    REXLOG_WARN("[unlock-all] no kernel memory; cannot patch.");
     return false;
   }
   auto* bandera = kernel->memory()->TranslateVirtual<uint8_t*>(kUnlockAllByte);
   if (bandera == nullptr) {
-    REXLOG_WARN("[unlock-all] no se pudo traducir 0x{:08X}.", kUnlockAllByte);
+    REXLOG_WARN("[unlock-all] could not translate 0x{:08X}.", kUnlockAllByte);
     return false;
   }
   *bandera = activo ? 1 : 0;
   REXLOG_INFO("[unlock-all] byte 0x{:08X} = {} ({}).", kUnlockAllByte, *bandera,
-              activo ? "todo desbloqueado" : "progreso normal");
+              activo ? "everything unlocked" : "normal progress");
   return true;
 }
 
