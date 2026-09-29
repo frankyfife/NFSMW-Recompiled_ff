@@ -74,6 +74,13 @@ src/ui/presenter.cpp
 
 src/ui/d3d12/d3d12_presenter.cpp
     Con log_guest_fps, presents por segundo en el log ([present]).
+
+src/graphics/pipeline/texture/cache.cpp
+    Con log_guest_fps, estado del cache de texturas cada 10 s ([texturas]:
+    cuantas, MB, creadas, descartadas) y dos apartados mas en el desglose de
+    los fotogramas lentos (crear textura, subir memoria). MEDIDO conduciendo:
+    los tirones que quedaban eran "texturas 9,5-12,8 ms" en un solo
+    fotograma. Los limites por defecto (384/768 MB) los sube el lanzador.
 """
 
 import os
