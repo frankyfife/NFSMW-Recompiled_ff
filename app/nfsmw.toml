@@ -1,81 +1,81 @@
 # ============================================================================
-#  NFSMW Recomp - configuracion del ejecutable
+#  NFSMW Recomp - settings of the executable
 #
-#  El juego lee este archivo al arrancar, desde SU PROPIA CARPETA:
-#      <carpeta del .exe>\nfsmw.toml
+#  The game reads this file at startup, from ITS OWN FOLDER:
+#      <folder of the .exe>\nfsmw.toml
 #
-#  El nombre no es el del ejecutable, es el de la app -"nfsmw"-, asi que vale
-#  igual al lado de NFS_Most_Wanted.exe que de nfsmw.exe.
+#  The name is the app's -"nfsmw"-, not the executable's, so it works next to
+#  NFS_Most_Wanted.exe as well as next to nfsmw.exe.
 #
-#  Los argumentos de la linea de comandos MANDAN sobre lo que haya aqui, asi
-#  que se puede seguir probando cosas con PROBAR_RTV.bat sin tocar el archivo.
+#  Command-line arguments WIN over anything here. The launcher passes almost
+#  every setting on the command line, so what you pick in the launcher is what
+#  counts; this file matters when nfsmw.exe is started directly. The in-game
+#  ESC menu saves its changes here.
 # ============================================================================
 
 
 # ----------------------------------------------------------------------------
-#  Camino de emulacion de la EDRAM
+#  EDRAM emulation path
 # ----------------------------------------------------------------------------
 #
-#  QUE ES
-#  La Xbox 360 no tiene render targets normales: tiene 10 MB de memoria
-#  embebida -la EDRAM- donde el hardware fijo hace la mezcla y el test de
-#  profundidad. Emular eso se puede de dos formas:
+#  WHAT IT IS
+#  The Xbox 360 has no normal render targets: it has 10 MB of embedded memory
+#  -the EDRAM- where fixed-function hardware does blending and the depth test.
+#  There are two ways to emulate that:
 #
-#    "rtv"  render targets del host, usando la GPU de forma normal. Rapido.
-#    "rov"  se emula la EDRAM a mano dentro del pixel shader, con interlocks
-#           que fuerzan a procesar EN ORDEN los pixeles que se solapan. Es
-#           mas exacto y MUCHO mas lento.
+#    "rtv"  host render targets, using the GPU the normal way. Fast.
+#    "rov"  the EDRAM is emulated by hand inside the pixel shader, with
+#           interlocks that force overlapping pixels to be processed IN ORDER.
+#           More exact and MUCH slower.
 #
-#  POR QUE ESTA PUESTO A MANO
-#  Porque el SDK no elegia por rendimiento sino por FABRICANTE
+#  WHY IT IS SET BY HAND
+#  Because the SDK did not choose by performance but by GPU VENDOR
 #  -src/graphics/d3d12/render_target_cache.cpp-:
 #
 #      path_ = vendor == kIntel ? kPixelShaderInterlock : kHostRenderTargets;
 #
-#  Si la grafica era Intel, ROV forzado. El motivo esta fechado en el propio
-#  comentario del SDK: un bug del driver de Intel de abril de 2021 -una UHD
-#  630- por el que la comparacion de stencil "always" no funcionaba. Y encima
-#  el comentario de al lado dice "The ROV path is currently much slower
-#  generally".
+#  On Intel, ROV was forced. The reason is dated in the SDK's own comment: an
+#  Intel driver bug from April 2021 -on a UHD 630- where the "always" stencil
+#  comparison did not work. And the comment next to it says "The ROV path is
+#  currently much slower generally".
 #
-#  MEDIDO EN ESTE PROYECTO, en una Intel Iris 540, mismo sitio, sin vsync:
-#      rov (lo que forzaba el SDK)    ~10 fps
-#      rtv (esto)                     ~18 fps
+#  MEASURED IN THIS PROJECT, on an Intel Iris 540, same spot, no vsync:
+#      rov (what the SDK forced)    ~10 fps
+#      rtv (this)                   ~18 fps
 #
-#  Y sin fallos visibles, o sea que el bug de 2021 ya no esta en el driver.
+#  With no visible glitches, so the 2021 bug is gone from the driver.
 #
-#  En NVIDIA y AMD "rtv" ya era el valor por defecto, asi que ponerlo aqui no
-#  cambia nada para ellos. Lo unico que hace esta linea es quitar de en medio
-#  una decision tomada por marca de tarjeta.
+#  On NVIDIA and AMD "rtv" already was the default, so setting it here changes
+#  nothing for them. All this line does is remove a decision made by the brand
+#  of the graphics card.
 #
-#  SI ALGUNA VEZ SE VE MAL -fantasmas, cosas que no se borran, restos del
-#  fotograma anterior- se prueba "rov" y se compara.
+#  IF SOMETHING EVER LOOKS WRONG -ghosting, things that do not get cleared,
+#  leftovers of the previous frame- try "rov" and compare.
 render_target_path_d3d12 = "rtv"
 
 
 # ----------------------------------------------------------------------------
-#  Resolucion (equivalente a GoldenEye-Recomp, mismo SDK ReXGlue)
+#  Resolution (same as GoldenEye-Recomp, same ReXGlue SDK)
 # ----------------------------------------------------------------------------
 #
-#  - video_mode_*: fija el MODO DE VIDEO GUEST (lo que el juego presenta), NO
-#    la ventana. El default del recomp era 854x480 (PAL EDTV) y el motor avisa
-#    "swap source is unscaled (854x480)" -> por eso se veia borroso aunque la
-#    escala fuera alta: el frame se estiraba desde 854x480.
-#  - resolution_scale: supersampling del motor, igual que en GoldenEye:
-#    renders/interiores a N veces en ambos ejes y se baja al tamano de ventana.
-#    Solo sirven enteros (1/2/3/4). Se aplica AL ARRANQUE: hay que reiniciar
-#    el juego para que cambie.
-#    Con video_mode 1080p:
-#      2  = 3840x2160 interno  (4x pixeles)      <- recomendado
-#      3  = 5760x3240 interno  (9x pixeles)
-#      4  = 7680x4320 interno  (16x pixeles)
-#  - anisotropic_override: 0=off, 3=4x, 4=8x, 5=16x (se aplica sin reiniciar).
-#  - swap_post_effect: "none" | "fxaa" | "fxaa_extreme" (AA post del motor).
-#  - user_profile_name: gamertag del perfil Xbox Live simulado (editable desde
-#    el menu de ESC, pestana OTROS).
+#  - video_mode_*: sets the GUEST VIDEO MODE (what the game presents), NOT the
+#    window. The recomp's default was 854x480 (PAL EDTV) and the engine warns
+#    "swap source is unscaled (854x480)" -> that is why it looked blurry even
+#    with a high scale: the frame was stretched from 854x480.
+#  - resolution_scale: the engine's own supersampling, as in GoldenEye:
+#    render targets at N times both axes, scaled down to the window size.
+#    Integers only (1/2/3/4). Applied AT STARTUP: restart the game to change
+#    it. With a 1080p video mode:
+#      2  = 3840x2160 internal  (4x the pixels)     <- recommended
+#      3  = 5760x3240 internal  (9x the pixels)
+#      4  = 7680x4320 internal  (16x the pixels)
+#  - anisotropic_override: 0=off, 3=4x, 4=8x, 5=16x (applies without restart).
+#  - swap_post_effect: "none" | "fxaa" | "fxaa_extreme" (the engine's post AA).
+#  - user_profile_name: gamertag of the simulated Xbox Live profile (editable
+#    in the ESC menu, GAME tab).
 #
-#  Los argumentos del lanzador mandan sobre esto: para probar este archivo se
-#  lanza nfsmw.exe directo (o un .bat) sin pasarle --resolution/--escala.
+#  The launcher's arguments win over this: to try this file, start nfsmw.exe
+#  directly (or from a .bat) without --resolution / --resolution_scale.
 video_mode_width  = 1920
 video_mode_height = 1080
 resolution_scale  = 2
@@ -83,9 +83,10 @@ anisotropic_override = 5
 
 
 # ----------------------------------------------------------------------------
-#  Sprache / idioma: 1 = English, 3 = Deutsch, 4 = Francais, 5 = Espanol
+#  Language: 1 = English, 3 = German, 4 = French, 5 = Spanish, 6 = Italian
+#  Only languages on your disc work.
 # ----------------------------------------------------------------------------
 user_language = 3
 
-# Black Edition: Byte 0x82A2CE06 (auch live im ESC-Menue umschaltbar).
+# Black Edition content: byte 0x82A2CE06 (also switchable live in the ESC menu).
 black_edition = true

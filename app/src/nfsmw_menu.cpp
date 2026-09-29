@@ -118,7 +118,7 @@ constexpr ImU32 kFondoWidget = IM_COL32(38, 44, 52, 255);
 constexpr ImU32 kVivo = IM_COL32(96, 200, 86, 255);
 constexpr ImU32 kAviso = IM_COL32(232, 161, 60, 255);
 
-const char* kTitulosPestana[] = {"VÍDEO", "OTROS", "SISTEMA", "DEBUG"};
+const char* kTitulosPestana[] = {"VIDEO", "GAME", "SYSTEM", "DEBUG"};
 constexpr int kNumPestanas = 4;
 
 // Acceso a cvars como strings (como hace el menu de GoldenEye).
@@ -262,7 +262,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
   // Cabecera.
   dl->AddText(ImGui::GetFont(), 26.0f,
-              ImVec2(x0.x + pad, x0.y + pad - 6.0f), kTexto, "AJUSTES");
+              ImVec2(x0.x + pad, x0.y + pad - 6.0f), kTexto, "SETTINGS");
   dl->AddText(ImGui::GetFont(), 26.0f,
               ImVec2(x1.x - pad - std::min(ancho * 0.42f, 360.0f), x0.y + pad - 6.0f), kAcento,
               "NFS MOST WANTED");
@@ -273,7 +273,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   const float y_pie = x1.y - pie;
   dl->AddLine(ImVec2(x0.x + pad, y_pie), ImVec2(x1.x - pad, y_pie), kMarco, borde);
   dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(x0.x + pad, y_pie + 6.0f), kTextoAtenuado,
-              "Flechas +/ - cambian de sección   |   ESC cierra");
+              "Up / Down arrows switch section   |   ESC closes");
 
   // Carril de pestanas a la izquierda.
   const float y_carril = x0.y + cabecera;
@@ -311,18 +311,20 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(58, 66, 78, 255));
   ImGui::PushStyleColor(ImGuiCol_SliderGrab, kAcento);
   ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, kAcento);
+  // Long explanations wrap at the edge of the content instead of being cut.
+  ImGui::PushTextWrapPos(0.0f);
 
   if (selected_tab_ == 0) {
-    ImGui::TextUnformatted("PANTALLA");
+    ImGui::TextUnformatted("DISPLAY");
     ImGui::Spacing();
 
     // Pantalla completa: en vivo (callback de ReXApp::SetupPresentation).
     bool completo = CvarB("fullscreen");
-    if (ImGui::Checkbox("Pantalla completa", &completo)) {
+    if (ImGui::Checkbox("Fullscreen", &completo)) {
       SetCvarB("fullscreen", completo);
       Persistir();
     }
-    MarcaVivo("se aplica al instante");
+    MarcaVivo("applies instantly");
 
     // V-Sync: el parche del presentador lo lee en cada fotograma.
     bool vsync = CvarB("vsync");
@@ -330,68 +332,70 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       SetCvarB("vsync", vsync);
       Persistir();
     }
-    MarcaVivo("se aplica al instante");
+    MarcaVivo("applies instantly");
 
-    if (ExisteCvar("max_fps")) {
+    // Frame rate: the pacer (frame_pacing_fps), live. The old presenter limiter
+    // (max_fps) would be a second clock fighting it.
+    if (ExisteCvar("frame_pacing_fps")) {
       static const Opcion kFps[] = {
-          {"30 FPS", "30"}, {"60 FPS", "60"}, {"120 FPS", "120"},
-          {"144 FPS", "144"}, {"180 FPS", "180"}, {"Sin límite", "0"}};
-      ComboSimple("Límite de fotogramas por segundo", CvarS("max_fps"), kFps, 6, nullptr,
+          {"30 fps (original)", "30"}, {"60 fps", "60"},   {"120 fps", "120"},
+          {"144 fps", "144"},          {"165 fps", "165"}, {"Unlimited", "0"}};
+      ComboSimple("Frame rate", CvarS("frame_pacing_fps"), kFps, 6, nullptr,
                   [this](const char* v) {
-                    SetCvarS("max_fps", v);
+                    SetCvarS("frame_pacing_fps", v);
                     Persistir();
                   });
-      MarcaVivo("se aplica al instante");
+      MarcaVivo("applies instantly");
     }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("RESOLUCIÓN Y NITIDEZ");
+    ImGui::TextUnformatted("RESOLUTION");
     ImGui::Spacing();
 
     static const Opcion kRes[] = {
         {"720p", "720p"}, {"900p", "900p"}, {"1080p", "1080p"},
         {"1440p", "1440p"}, {"1800p", "1800p"}, {"4K (2160p)", "4k"}};
-    ComboSimple("Resolución de ventana y modo de vídeo", CvarS("resolution"), kRes, 6,
-                "Personalizada", [this](const char* v) {
+    ComboSimple("Window resolution and video mode", CvarS("resolution"), kRes, 6,
+                "Custom", [this](const char* v) {
                   SetCvarS("resolution", v);
                   Persistir();
                 });
     MarcaReinicio();
 
     static const Opcion kIRes[] = {
-        {"1x - 720p (nativo)", "1"},
-        {"2x - 1440p (4 veces los píxeles)", "2"},
-        {"3x - 2160p 4K (9 veces los píxeles)", "3"},
-        {"4x - 2880p (16 veces los píxeles)", "4"}};
-    static const char kEtiquetaIRes[] = "Resolución interna (supersampling real del motor)";
+        {"1x - 720p (native)", "1"},
+        {"2x - 1440p (4x the pixels)", "2"},
+        {"3x - 2160p 4K (9x the pixels)", "3"},
+        {"4x - 2880p (16x the pixels)", "4"}};
+    static const char kEtiquetaIRes[] = "Internal resolution (real supersampling by the engine)";
     const std::string escala = CvarS("resolution_scale");
     ComboSimple(kEtiquetaIRes, escala, kIRes, 4, nullptr, [this](const char* v) {
       SetCvarS("resolution_scale", v);
       Persistir();
     });
     MarcaReinicioConAviso(
-        "Escala entera de los render targets del juego: más píxeles cada fotograma, "
-        "no un estirado. Con 2x y el foco desactivado se ve nítido sin coste de nitidez.");
+        "Integer scale of the game's render targets: more pixels every frame, not a "
+        "stretch. On a modern GPU 2x or 3x cost next to nothing.");
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("CALIDAD DE IMAGEN");
+    ImGui::TextUnformatted("IMAGE QUALITY");
     ImGui::Spacing();
 
     if (ExisteCvar("anisotropic_override")) {
       static const Opcion kAniso[] = {{"Off (bilinear)", "0"}, {"1x", "1"}, {"2x", "2"},
                                       {"4x", "3"}, {"8x", "4"}, {"16x", "5"}};
-      ComboSimple("Filtrado anisotrópico", CvarS("anisotropic_override"), kAniso, 6, nullptr,
+      ComboSimple("Anisotropic filtering", CvarS("anisotropic_override"), kAniso, 6, nullptr,
                   [this](const char* v) {
                     SetCvarS("anisotropic_override", v);
                     Persistir();
                   });
-      MarcaVivo("se aplica al instante");
+      MarcaVivo("applies instantly");
     }
 
     if (ExisteCvar("swap_post_effect")) {
@@ -405,7 +409,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
     if (ExisteCvar("gpu_backend")) {
       static const Opcion kApi[] = {{"Direct3D 12", "d3d12"}, {"Vulkan", "vulkan"}};
-      ComboSimple("API gráfica", CvarS("gpu_backend"), kApi, 2, nullptr, [this](const char* v) {
+      ComboSimple("Graphics API", CvarS("gpu_backend"), kApi, 2, nullptr, [this](const char* v) {
         SetCvarS("gpu_backend", v);
         Persistir();
       });
@@ -419,7 +423,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       ImGui::Separator();
       ImGui::Spacing();
       ImGui::TextColored(ImColor(kAviso),
-                         "Los cambios de esta sección se aplican al reiniciar");
+                         "Changes in this section apply after a restart");
       if (BotonAplicar()) {
         Persistir();
         if (callbacks_.request_restart) {
@@ -429,36 +433,36 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     }
 
   } else if (selected_tab_ == 1) {
-    ImGui::TextUnformatted("CONTENIDO");
+    ImGui::TextUnformatted("CONTENT");
     ImGui::Spacing();
 
     bool black = CvarB("black_edition");
-    if (ImGui::Checkbox("Contenido Black Edition", &black)) {
+    if (ImGui::Checkbox("Black Edition content", &black)) {
       SetCvarB("black_edition", black);
       AplicarBlackEdition(black);
       Persistir();
     }
-    MarcaVivo("(se aplica al instante)");
+    MarcaVivo("(applies instantly)");
     ImGui::TextColored(ImColor(kTextoAtenuado),
-                       "Desbloquea los coches de pago (edición Black) como descargables en el "
-                       "concesionario del garaje.");
+                       "The Black Edition cars appear as downloadable content in the car "
+                       "lot.");
     ImGui::Spacing();
 
     bool todo = CvarB("unlock_all");
-    if (ImGui::Checkbox("Desbloquearlo todo", &todo)) {
+    if (ImGui::Checkbox("Unlock everything", &todo)) {
       SetCvarB("unlock_all", todo);
       AplicarUnlockAll(todo);
       Persistir();
     }
-    MarcaVivo("(se aplica al instante)");
+    MarcaVivo("(applies instantly)");
     ImGui::TextColored(ImColor(kTextoAtenuado),
-                       "Coches, piezas, eventos y circuitos ocultos. No toca la partida "
-                       "guardada: al desactivarlo vuelve el progreso normal.");
+                       "The game's own UnlockAllThings debug flag. It does not touch the save: "
+                       "switch it off and the normal progress is back.");
     ImGui::Spacing();
 
     if (ExisteCvar("grant_user_privileges")) {
       bool gp = CvarB("grant_user_privileges");
-      if (ImGui::Checkbox("Privilegios de usuario (acceso online)", &gp)) {
+      if (ImGui::Checkbox("User privileges (online access)", &gp)) {
         SetCvarB("grant_user_privileges", gp);
         Persistir();
       }
@@ -469,7 +473,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("XBOX LIVE (SIMULADO)");
+    ImGui::TextUnformatted("XBOX LIVE (SIMULATED)");
     ImGui::Spacing();
 
     if (!gamertag_sync_) {
@@ -480,44 +484,44 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       gamertag_sync_ = true;
     }
     ImGui::SetNextItemWidth(340.0f);
-    if (ImGui::InputText("Gamertag del perfil", gamertag_, sizeof(gamertag_))) {
+    if (ImGui::InputText("Profile gamertag", gamertag_, sizeof(gamertag_))) {
       rex::cvar::SetFlagByName("user_profile_name", gamertag_);
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) {
       Persistir();
     }
-    MarcaVivo("en vivo: el juego lo lee cada vez que pide el perfil");
+    MarcaVivo("live: the game reads it every time it asks for the profile");
 
     ImGui::TextColored(
         ImColor(kTextoAtenuado),
-        "Sesion simulada: usuario 0 firmado, membresia Gold, XUID 0x00B13EBABEBABEBE, "
-        "perfil local y online.");
+        "Simulated session: user 0 signed in, Gold membership, XUID 0x00B13EBABEBABEBE, "
+        "local and online profile.");
     ImGui::TextColored(
         ImColor(kTextoAtenuado),
-        "Cuando el juego pida escribir algo (un nombre, un perfil nuevo), el recomp "
-        "abre su propio teclado en pantalla: escribe y pulsa OK. La guia de Xbox "
-        "siempre se considera cerrada, asi que ninguna pantalla se queda esperandola.");
+        "When the game asks for text (a name, a new profile), the recomp opens its "
+        "own on-screen keyboard: type and press OK. The Xbox guide always counts as "
+        "closed, so no screen is left waiting for it.");
     ImGui::TextColored(ImColor(kTextoAtenuado),
-                       "Multijugador online: servidores de EA apagados; la unica vía "
-                       "que queda es System Link, y no esta implementado aun.");
+                       "Online multiplayer: EA's servers are gone; the only way left is "
+                       "System Link, which is not implemented yet.");
     ImGui::Spacing();
 
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("JUEGO");
+    ImGui::TextUnformatted("GAME");
     ImGui::Spacing();
 
     if (ExisteCvar("game_speed")) {
       float velocidad = CvarF("game_speed");
-      if (ImGui::SliderFloat("Velocidad del juego", &velocidad, 20.0f, 200.0f, "%.0f%%")) {
+      if (ImGui::SliderFloat("Game speed", &velocidad, 20.0f, 200.0f, "%.0f%%")) {
         velocidad = std::clamp(velocidad, 20.0f, 200.0f);
         SetCvarF("game_speed", velocidad);
       }
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         Persistir();
       }
-      MarcaVivo("en vivo: también con el menú cerrado, hasta que se vuelva a tocar o se cierre el juego");
+      MarcaVivo("live: also with the menu closed, until changed again or the game is closed");
     }
 
     ImGui::Spacing();
@@ -525,18 +529,18 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     ImGui::Spacing();
 
     ImGui::TextColored(ImColor(kTextoAtenuado),
-                       "Tip: el menú de ajustes del recomp (F3 y F4) tiene todas las "
-                       "opciones técnicas; este menú es el resumen que se usa a diario.");
+                       "Tip: the recomp's settings (F3 and F4) have every technical option; this "
+                       "menu is the everyday summary.");
 
   } else if (selected_tab_ == 2) {
-    ImGui::TextUnformatted("APLICACIÓN");
+    ImGui::TextUnformatted("APPLICATION");
     ImGui::Spacing();
 
     const auto pendientes = rex::cvar::GetPendingRestartFlags();
     if (pendientes.empty()) {
-      ImGui::TextColored(ImColor(kVivo), "No hay cambios pendientes de reinicio.");
+      ImGui::TextColored(ImColor(kVivo), "No changes waiting for a restart.");
     } else {
-      ImGui::TextColored(ImColor(kAviso), "Cambios pendientes de reinicio:");
+      ImGui::TextColored(ImColor(kAviso), "Changes waiting for a restart:");
       ImGui::TextWrapped("%s", JuntarLista(pendientes).c_str());
     }
 
@@ -544,13 +548,13 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::Button("REANUDAR", ImVec2(240.0f, 0.0f))) {
+    if (ImGui::Button("RESUME", ImVec2(240.0f, 0.0f))) {
       Close();
     }
-    if (ImGui::Button("GUARDAR CONFIGURACIÓN", ImVec2(240.0f, 0.0f))) {
+    if (ImGui::Button("SAVE SETTINGS", ImVec2(240.0f, 0.0f))) {
       Persistir();
     }
-    if (ImGui::Button("RESTAURAR VALORES POR DEFECTO", ImVec2(240.0f, 0.0f))) {
+    if (ImGui::Button("RESTORE DEFAULTS", ImVec2(240.0f, 0.0f))) {
       rex::cvar::ResetAllToDefaults();
       Persistir();
     }
@@ -560,67 +564,67 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
         callbacks_.request_restart();
       }
     }
-    if (ImGui::Button("SALIR AL ESCRITORIO", ImVec2(240.0f, 0.0f))) {
+    if (ImGui::Button("QUIT TO DESKTOP", ImVec2(240.0f, 0.0f))) {
       quit_requested_ = true;
       Persistir();
       Close();
     }
   } else {
     // DEBUG -----------------------------------------------------------------
-    ImGui::TextUnformatted("RENDIMIENTO");
+    ImGui::TextUnformatted("PERFORMANCE");
     ImGui::Spacing();
 
     if (callbacks_.sample_fps) {
       const auto stats = callbacks_.sample_fps();
-      ImGui::Text("  FPS del juego: %.1f", stats.fps);
-      ImGui::Text("  Tiempo de fotograma: %.2f ms", stats.frame_time_ms);
+      ImGui::Text("  Game fps: %.1f", stats.fps);
+      ImGui::Text("  Frame time: %.2f ms", stats.frame_time_ms);
       ImGui::TextColored(
           ImColor(kTextoAtenuado),
-          "El medidor avanza mientras este menu esta abierto: deja un momento.");
+          "The meter runs while this menu is open: give it a moment.");
     }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("GRÁFICAS");
+    ImGui::TextUnformatted("GRAPHICS");
     ImGui::Spacing();
-    FilaDebug("Backend gráfico", CvarS("gpu_backend"));
-    FilaDebug("Plugin GPU", CvarS("gpu_plugin"));
-    FilaDebug("Camino EDRAM", CvarS("render_target_path_d3d12"));
+    FilaDebug("Graphics backend", CvarS("gpu_backend"));
+    FilaDebug("GPU plugin", CvarS("gpu_plugin"));
+    FilaDebug("EDRAM path", CvarS("render_target_path_d3d12"));
     FilaDebug("Anti-aliasing", CvarS("swap_post_effect"));
-    FilaDebug("Lectura de exposición", CvarS("readback_resolve"));
+    FilaDebug("Resolve readback", CvarS("readback_resolve"));
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("VÍDEO");
+    ImGui::TextUnformatted("VIDEO");
     ImGui::Spacing();
-    FilaDebug("Modo de vídeo", CvarS("video_mode_width") + "x" + CvarS("video_mode_height"));
-    FilaDebug("Escala interna", CvarS("resolution_scale"));
-    FilaDebug("Ventana", CvarS("window_width") + "x" + CvarS("window_height"));
-    FilaDebug("Pantalla completa", CvarS("fullscreen"));
-    FilaDebug("Anisotropía", CvarS("anisotropic_override"));
+    FilaDebug("Video mode", CvarS("video_mode_width") + "x" + CvarS("video_mode_height"));
+    FilaDebug("Internal scale", CvarS("resolution_scale"));
+    FilaDebug("Window", CvarS("window_width") + "x" + CvarS("window_height"));
+    FilaDebug("Fullscreen", CvarS("fullscreen"));
+    FilaDebug("Anisotropic", CvarS("anisotropic_override"));
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("SISTEMA");
+    ImGui::TextUnformatted("SYSTEM");
     ImGui::Spacing();
     FilaDebug("V-Sync", CvarS("vsync"));
-    if (ExisteCvar("max_fps")) {
-      FilaDebug("Límite de FPS", CvarS("max_fps"));
+    if (ExisteCvar("frame_pacing_fps")) {
+      FilaDebug("Frame rate (0 = unlimited)", CvarS("frame_pacing_fps"));
     }
     if (ExisteCvar("game_speed")) {
-      FilaDebug("Velocidad del juego", CvarS("game_speed"));
+      FilaDebug("Game speed", CvarS("game_speed"));
     }
     FilaDebug("Gamertag", CvarS("user_profile_name"));
     FilaDebug("Black Edition", CvarS("black_edition"));
-    FilaDebug("Desbloquearlo todo", CvarS("unlock_all"));
+    FilaDebug("Unlock everything", CvarS("unlock_all"));
     if (ExisteCvar("grant_user_privileges")) {
-      FilaDebug("Privilegios online", CvarS("grant_user_privileges"));
+      FilaDebug("Online privileges", CvarS("grant_user_privileges"));
     }
 
     ImGui::Spacing();
@@ -629,9 +633,9 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
     const auto pendientes = rex::cvar::GetPendingRestartFlags();
     if (pendientes.empty()) {
-      ImGui::TextColored(ImColor(kVivo), "Sin cambios pendientes de reinicio.");
+      ImGui::TextColored(ImColor(kVivo), "No changes waiting for a restart.");
     } else {
-      ImGui::TextColored(ImColor(kAviso), "Reinicio pendiente para:");
+      ImGui::TextColored(ImColor(kAviso), "Restart needed for:");
       ImGui::TextWrapped("%s", JuntarLista(pendientes).c_str());
     }
 
@@ -641,10 +645,11 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
     ImGui::TextColored(
         ImColor(kTextoAtenuado),
-        "F3 abre el panel de depuracion del runtime y F4 todos los ajustes tecnicos "
-        "(cvars). Este menu es el resumen de lo que se usa a diario.");
+        "F3 opens the runtime debug panel and F4 every technical setting (cvars). "
+        "This menu is the everyday summary.");
   }
 
+  ImGui::PopTextWrapPos();
   ImGui::PopStyleColor(9);
   ImGui::PopStyleVar(2);
   ImGui::EndChild();
@@ -662,16 +667,16 @@ void NfsmwMenuDialog::MarcaVivo(const char* texto) {
 }
 
 void NfsmwMenuDialog::MarcaReinicio(const char* texto) {
-  ImGui::TextColored(ImColor(kAviso), (texto && *texto) ? texto : "(se aplica al reiniciar)");
+  ImGui::TextColored(ImColor(kAviso), (texto && *texto) ? texto : "(applies after a restart)");
   ImGui::Spacing();
 }
 
 void NfsmwMenuDialog::MarcaReinicioConAviso(const char* texto) {
-  ImGui::TextColored(ImColor(kAviso), "Reinicia para que tenga efecto.");
+  ImGui::TextColored(ImColor(kAviso), "Restart for this to take effect.");
   ImGui::TextColored(ImColor(kTextoAtenuado), texto);
   ImGui::Spacing();
 }
 
 bool NfsmwMenuDialog::BotonAplicar() {
-  return ImGui::Button("APLICAR Y REINICIAR", ImVec2(240.0f, 0.0f));
+  return ImGui::Button("APPLY AND RESTART", ImVec2(240.0f, 0.0f));
 }
