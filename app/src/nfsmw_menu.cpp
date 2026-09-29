@@ -67,6 +67,42 @@ bool AplicarBlackEdition(bool activo) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+//  Cvar del proyecto: desbloquearlo todo (UnlockAllThings).
+//
+//  Es la variable de depuracion del propio juego. En la version de PC es el
+//  byte 0x926124: es el que pone NFSMWExtraOptions ("UnlockAllThings ...
+//  Everything is now unlocked") y el primero que escribe el manejador de
+//  trucos (0x926124, luego 0x926126 y 0x926125). El manejador de trucos de la
+//  Xbox, sub_823C4CF0, hace lo mismo en el mismo orden: caso 0 -> 0x82A2CE00,
+//  caso 1 -> 0x82A2CE02 y 0x82A2CE01. Y como en PC (25 lecturas) aqui hay
+//  una treintena de funciones que lo leen, varias junto a la bandera Black
+//  Edition. No toca la partida guardada: con la opcion apagada todo vuelve a
+//  estar como estaba.
+// ---------------------------------------------------------------------------
+REXCVAR_DEFINE_BOOL(unlock_all, false, "Contenido",
+                    "Desbloquearlo todo: coches, piezas, eventos y circuitos ocultos")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+constexpr uint32_t kUnlockAllByte = 0x82A2CE00u;
+
+bool AplicarUnlockAll(bool activo) {
+  auto* kernel = rex::system::kernel_state();
+  if (kernel == nullptr || kernel->memory() == nullptr) {
+    REXLOG_WARN("[unlock-all] sin kernel de memoria; no se puede parchear.");
+    return false;
+  }
+  auto* bandera = kernel->memory()->TranslateVirtual<uint8_t*>(kUnlockAllByte);
+  if (bandera == nullptr) {
+    REXLOG_WARN("[unlock-all] no se pudo traducir 0x{:08X}.", kUnlockAllByte);
+    return false;
+  }
+  *bandera = activo ? 1 : 0;
+  REXLOG_INFO("[unlock-all] byte 0x{:08X} = {} ({}).", kUnlockAllByte, *bandera,
+              activo ? "todo desbloqueado" : "progreso normal");
+  return true;
+}
+
 namespace {
 
 // Paleta del menu: inspirada en la interfaz del juego (fondo oscuro, acento
@@ -408,6 +444,18 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
                        "concesionario del garaje.");
     ImGui::Spacing();
 
+    bool todo = CvarB("unlock_all");
+    if (ImGui::Checkbox("Desbloquearlo todo", &todo)) {
+      SetCvarB("unlock_all", todo);
+      AplicarUnlockAll(todo);
+      Persistir();
+    }
+    MarcaVivo("(se aplica al instante)");
+    ImGui::TextColored(ImColor(kTextoAtenuado),
+                       "Coches, piezas, eventos y circuitos ocultos. No toca la partida "
+                       "guardada: al desactivarlo vuelve el progreso normal.");
+    ImGui::Spacing();
+
     if (ExisteCvar("grant_user_privileges")) {
       bool gp = CvarB("grant_user_privileges");
       if (ImGui::Checkbox("Privilegios de usuario (acceso online)", &gp)) {
@@ -570,6 +618,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     }
     FilaDebug("Gamertag", CvarS("user_profile_name"));
     FilaDebug("Black Edition", CvarS("black_edition"));
+    FilaDebug("Desbloquearlo todo", CvarS("unlock_all"));
     if (ExisteCvar("grant_user_privileges")) {
       FilaDebug("Privilegios online", CvarS("grant_user_privileges"));
     }

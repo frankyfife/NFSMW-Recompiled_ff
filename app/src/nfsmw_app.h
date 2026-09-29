@@ -40,6 +40,7 @@
 
 // Cvar "Contenido > black_edition", definido en nfsmw_menu.cpp.
 REXCVAR_DECLARE(bool, black_edition);
+REXCVAR_DECLARE(bool, unlock_all);
 
 class NfsmwApp : public rex::ReXApp {
  public:
@@ -537,9 +538,13 @@ class NfsmwApp : public rex::ReXApp {
   void AplicarParcheBlackEdition() {
     if (!REXCVAR_GET(black_edition)) {
       REXLOG_INFO("[black-edition] desactivado (black_edition=false).");
-      return;
+    } else {
+      AplicarBlackEdition(true);
     }
-    AplicarBlackEdition(true);
+    // Mismo momento para "desbloquearlo todo" (nfsmw_menu.cpp).
+    if (REXCVAR_GET(unlock_all)) {
+      AplicarUnlockAll(true);
+    }
   }
 
   void AlternarMenu() {

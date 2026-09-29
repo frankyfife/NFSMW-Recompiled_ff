@@ -15,6 +15,8 @@
 // Escribe la bandera Black Edition (byte 0x82A2CE06) en la memoria del guest.
 // Vale tanto al cargar el XEX como en vivo desde el menu.
 bool AplicarBlackEdition(bool activo);
+// Igual con UnlockAllThings (byte 0x82A2CE00), ver nfsmw_menu.cpp.
+bool AplicarUnlockAll(bool activo);
 
 class NfsmwMenuDialog : public rex::ui::ImGuiDialog {
  public:

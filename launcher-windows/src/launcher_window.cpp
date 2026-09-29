@@ -373,11 +373,16 @@ QWidget* LauncherWindow::buildContent() {
   gameOpts->addRow(QStringLiteral("Language"), language_);
   blackEdition_ = new ToggleSwitch(QStringLiteral("Black Edition cars in the car lot"));
   gameOpts->addWide(blackEdition_);
+  unlockAll_ = new ToggleSwitch(QStringLiteral("Unlock everything (cars, parts, events)"));
+  gameOpts->addWide(unlockAll_);
   gameOpts->grid()->addWidget(
-      note(QStringLiteral("Can also be switched live in the in-game ESC menu.")),
+      note(QStringLiteral("Both can also be switched live in the in-game ESC menu. "
+                          "Unlocking does not touch your save: switch it off and "
+                          "your normal progress is back.")),
       gameOpts->grid()->rowCount(), 0, 1, 2);
   connect(language_, &QComboBox::currentIndexChanged, this, onChange);
   connect(blackEdition_, &ToggleSwitch::toggled, this, onChange);
+  connect(unlockAll_, &ToggleSwitch::toggled, this, onChange);
   left->addWidget(gameOpts);
   left->addStretch();
 
@@ -518,6 +523,7 @@ void LauncherWindow::loadSettings() {
     if (lang == QLatin1String(kLanguages[i].value)) language_->setCurrentIndex(i);
   }
   blackEdition_->setChecked(s.value("game/black_edition", true).toBool());
+  unlockAll_->setChecked(s.value("game/unlock_all", false).toBool());
 
   const QString fps = s.value("frame/mode", "60").toString();
   fps_->setCurrentIndex(fps == "60" ? 1 : fps == "unlimited" ? 2 : fps == "custom" ? 3 : 0);
@@ -549,6 +555,7 @@ void LauncherWindow::saveSettings() const {
   s.setValue("display/monitor", monitor_->currentIndex());
   s.setValue("game/language", QString::fromLatin1(kLanguages[language_->currentIndex()].value));
   s.setValue("game/black_edition", blackEdition_->isChecked());
+  s.setValue("game/unlock_all", unlockAll_->isChecked());
   static const char* const kFpsModes[] = {"30", "60", "unlimited", "custom"};
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
@@ -659,6 +666,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
     a << opt("user_language", lang);
   }
   a << QStringLiteral("--black_edition=%1").arg(blackEdition_->isChecked() ? "true" : "false");
+  a << QStringLiteral("--unlock_all=%1").arg(unlockAll_->isChecked() ? "true" : "false");
   a << QStringLiteral("--async_shader_compilation=%1")
            .arg(asyncShaders_->isChecked() ? "true" : "false");
   // One line every 10 s with the frames the game really presents.

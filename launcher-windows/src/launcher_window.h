@@ -78,6 +78,7 @@ class LauncherWindow final : public QMainWindow {
 
   ChevronCombo* language_ = nullptr;
   ToggleSwitch* blackEdition_ = nullptr;
+  ToggleSwitch* unlockAll_ = nullptr;
 
   Segmented* fps_ = nullptr;
   QSpinBox* customFps_ = nullptr;
