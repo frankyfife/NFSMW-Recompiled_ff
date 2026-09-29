@@ -654,6 +654,12 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
 
   a << opt("swap_post_effect", kAaValues[aa_->currentIndex()]);
   a << opt("anisotropic_override", QString::number(kAnisoValues[aniso_->currentIndex()]));
+  // Texture cache limits. The Xenia defaults (384 MB soft, 768 MB hard) are
+  // sized for small GPUs: NFS MW streams the city while driving, the cache
+  // throws textures away at those limits and recreates them when you pass by
+  // again - a texture hitch every few seconds. 2/4 GB fits any current card.
+  a << opt("texture_cache_memory_limit_soft", QStringLiteral("2048"));
+  a << opt("texture_cache_memory_limit_hard", QStringLiteral("4096"));
   if (filter_->currentIndex() != 0) {
     a << opt("present_effect", kFilterValues[filter_->currentIndex()]);
   }
