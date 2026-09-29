@@ -383,8 +383,8 @@ QWidget* LauncherWindow::buildContent() {
 
   // ---- Frame rate ----
   auto* frame = new Card(QStringLiteral("Frame rate"));
-  fps_ = new Segmented({QStringLiteral("30 · Original"), QStringLiteral("60 (exp.)"),
-                        QStringLiteral("Custom")});
+  fps_ = new Segmented({QStringLiteral("30 · Original"), QStringLiteral("60"),
+                        QStringLiteral("Unlimited"), QStringLiteral("Custom")});
   frame->addRow(QStringLiteral("Target"), fps_);
   auto* customRow = new QWidget;
   auto* cr = new QHBoxLayout(customRow);
@@ -395,8 +395,11 @@ QWidget* LauncherWindow::buildContent() {
   cr->addWidget(customFps_);
   cr->addWidget(fpsNote_, 1);
   frame->addRow(QStringLiteral("Custom fps"), customRow);
+  vsync_ = new ToggleSwitch(QStringLiteral("V-Sync (sync to the display, no tearing)"));
+  frame->addWide(vsync_);
   connect(fps_, &Segmented::currentIndexChanged, this, onChange);
   connect(customFps_, &QSpinBox::valueChanged, this, onChange);
+  connect(vsync_, &ToggleSwitch::toggled, this, onChange);
   right->addWidget(frame);
 
   // ---- Image quality ----
@@ -516,8 +519,9 @@ void LauncherWindow::loadSettings() {
   blackEdition_->setChecked(s.value("game/black_edition", true).toBool());
 
   const QString fps = s.value("frame/mode", "30").toString();
-  fps_->setCurrentIndex(fps == "30" ? 0 : (fps == "custom" ? 2 : 1));
+  fps_->setCurrentIndex(fps == "60" ? 1 : fps == "unlimited" ? 2 : fps == "custom" ? 3 : 0);
   customFps_->setValue(s.value("frame/fps", 60).toInt());
+  vsync_->setChecked(s.value("frame/vsync", true).toBool());
 
   aa_->setCurrentIndex(std::max<qsizetype>(0, kAaValues.indexOf(s.value("image/aa", "none").toString())));
   const qsizetype an = kAnisoValues.indexOf(s.value("image/anisotropic", 4).toInt());
@@ -543,8 +547,10 @@ void LauncherWindow::saveSettings() const {
   s.setValue("display/monitor", monitor_->currentIndex());
   s.setValue("game/language", QString::fromLatin1(kLanguages[language_->currentIndex()].value));
   s.setValue("game/black_edition", blackEdition_->isChecked());
-  s.setValue("frame/mode", fps_->currentIndex() == 0 ? "30" : (fps_->currentIndex() == 2 ? "custom" : "60"));
+  static const char* const kFpsModes[] = {"30", "60", "unlimited", "custom"};
+  s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
+  s.setValue("frame/vsync", vsync_->isChecked());
   s.setValue("image/aa", kAaValues[aa_->currentIndex()]);
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
@@ -578,10 +584,14 @@ void LauncherWindow::autoDetectGame() {
 // guest vblank rate -guest_vblank_rate, the same idea as Xenia Canary's
 // framerate_limit- sets the pace: 120 Hz gives 60 fps, throttled exactly like
 // on the console, while vsync keeps presentation in step with the monitor.
+// 0 = unlimited.
 int LauncherWindow::targetFps() const {
-  if (fps_->currentIndex() == 0) return 30;
-  if (fps_->currentIndex() == 2) return customFps_->value();
-  return 60;
+  switch (fps_->currentIndex()) {
+    case 1: return 60;
+    case 2: return 0;
+    case 3: return customFps_->value();
+    default: return 30;
+  }
 }
 
 QString LauncherWindow::outputResolution() const {
@@ -610,9 +620,12 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << QStringLiteral("--fullscreen=%1").arg(mode_->currentIndex() == 0 ? "true" : "false");
   a << "--monitor" << QString::number(std::max(0, monitor_->currentIndex()));
 
+  // The game presents every second vblank, so the vblank rate is twice the
+  // target; "unlimited" gives it a vblank every millisecond. V-Sync only
+  // decides whether presentation waits for the display.
   const int fps = targetFps();
-  a << "--vsync=true";
-  a << "--guest_vblank_rate" << QString::number(fps == 30 ? 0 : fps * 2);
+  a << QStringLiteral("--vsync=%1").arg(vsync_->isChecked() ? "true" : "false");
+  a << "--guest_vblank_rate" << QString::number(fps == 0 ? 1000 : fps * 2);
   a << "--max_fps" << "0";
 
   a << QStringLiteral("--swap_post_effect=%1").arg(kAaValues[aa_->currentIndex()]);
@@ -668,12 +681,16 @@ void LauncherWindow::refresh() {
             "hot");
   }
 
-  customFps_->setEnabled(fps_->currentIndex() == 2);
+  customFps_->setEnabled(fps_->currentIndex() == 3);
   const int fps = targetFps();
-  setNote(fpsNote_, fps == 30 ? QStringLiteral("Console timing, as shipped.")
-                              : QStringLiteral("Experimental: guest vblank at %1 Hz. Menus stay "
-                                               "at 30; the log shows the real rate.")
-                                    .arg(fps * 2));
+  if (fps == 30) {
+    setNote(fpsNote_, QStringLiteral("Console timing, as shipped. Smoothest."));
+  } else {
+    setNote(fpsNote_,
+            QStringLiteral("Experimental: the game reaches what the emulation allows; menus "
+                           "stay at 30. Physics run on real time, so speed is unaffected."),
+            "warn");
+  }
 
   const bool sharpen = filter_->currentIndex() != 0;
   sharpness_->setEnabled(sharpen);

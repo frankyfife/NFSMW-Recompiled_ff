@@ -67,9 +67,9 @@ BLOQUES = [
         "// presenta cada 2 vblanks -30 fps en una Xbox a 60 Hz- va a 60 fps con 120.\n"
         "// 0 = la frecuencia del modo de video, como siempre.\n"
         'REXCVAR_DEFINE_INT32(guest_vblank_rate, 0, "GPU",\n'
-        '                     "Guest vblank rate in Hz while vsync is on (0 = video mode refresh rate). "\n'
-        '                     "A game locked to 30 fps waits two vblanks per frame, so 120 makes it "\n'
-        '                     "run at 60 fps. Same as framerate_limit in Xenia Canary.")\n'
+        '                     "Guest vblank rate in Hz (0 = video mode refresh rate with vsync, "\n'
+        '                     "1000 without). A game locked to 30 fps waits two vblanks per frame, so "\n'
+        '                     "120 makes it run at up to 60 fps. Same as framerate_limit in Xenia Canary.")\n'
         "    .range(0, 1000)\n"
         "    .lifecycle(rex::cvar::Lifecycle::kHotReload);\n"
         "\n"
@@ -84,7 +84,8 @@ BLOQUES = [
         "        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();\n"
         "        while (vsync_worker_running_) {\n"
         "          uint64_t current_time = chrono::Clock::QueryGuestTickCount();\n"
-        "          uint64_t interval_ticks =\n",
+        "          uint64_t interval_ticks =\n"
+        "              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;\n",
         "        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);\n"
         "        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();\n"
         "        while (vsync_worker_running_) {\n"
@@ -94,7 +95,11 @@ BLOQUES = [
         "          double vblank_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;\n"
         "          uint64_t vsync_interval_ticks =\n"
         "              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_hz));\n"
-        "          uint64_t interval_ticks =\n",
+        "          // Con guest_vblank_rate puesto manda el, haya vsync o no: asi el ritmo del\n"
+        "          // juego y la sincronizacion con el monitor se eligen por separado.\n"
+        "          uint64_t interval_ticks = vblank_rate > 0 ? vsync_interval_ticks\n"
+        "                                    : REXCVAR_GET(vsync) ? vsync_interval_ticks\n"
+        "                                                         : no_vsync_interval_ticks;\n",
     ),
     (
         "src/graphics/command_processor.cpp",
