@@ -6,38 +6,42 @@ Parches de este fork sobre el SDK (ReXGlue v0.10.0).
     python tools/parche_ff.py --estado
     python tools/parche_ff.py --revertir
 
-Como los demas parche_*.py: sustitucion de texto exacta, bloque a bloque.
-Un bloque solo se aplica si su anclaje aparece UNA vez; si ya esta puesto lo
-dice y no toca nada; --revertir deja el texto original.
+Como los demas parche_*.py: sustitucion de texto exacta, bloque a bloque. Un
+bloque solo se aplica si su anclaje aparece UNA vez; si ya esta puesto lo dice
+y no toca nada; --revertir deja el texto original. Los bloques se generan
+desde el diff del SDK parcheado (con contexto hasta que el anclaje es unico),
+por eso llevan nombres de fichero y numero y no de funcion.
 
-QUE LLEVA
-=========
+QUE LLEVA (el porque esta en los comentarios PARCHE LOCAL del propio codigo)
+==========
 
-1. include/rex/platform/fpscr.h - excepciones de coma flotante SIEMPRE
-   enmascaradas.
+include/rex/platform/fpscr.h
+    Excepciones de coma flotante SIEMPRE enmascaradas. Sin esto el juego muere
+    con 0xC000008F (STATUS_FLOAT_INEXACT_RESULT) antes del menu. Es una
+    cabecera que el codigo generado incluye inline: tras aplicarlo hay que
+    recompilar el SDK Y el juego.
 
-   Un contexto del guest cuyo csr nunca paso por InitHost vale 0. El primer
-   enableFlushMode() hacia entonces setcsr(FlushMask): MXCSR con TODAS las
-   excepciones desenmascaradas, y el siguiente divss inexacto mataba el
-   proceso con STATUS_FLOAT_INEXACT_RESULT (0xC000008F). Pasaba al arrancar,
-   antes del menu. Ahora setcsr fuerza siempre los bits de mascara.
+src/graphics/graphics_system.cpp
+    guest_vblank_rate: cada cuanto recibe el juego un vblank, con o sin vsync
+    (como framerate_limit en Xenia Canary).
 
-   OJO: es una cabecera que el codigo generado incluye inline, asi que tras
-   aplicarlo hay que recompilar el SDK Y el juego.
+src/graphics/command_processor.cpp
+    frame_pacing_fps: los flips salen a un ritmo exacto (30 o 60) medido con
+    un reloj preciso. Con guest_vblank_rate alto el juego no pierde ranuras
+    de vblank y el ritmo lo marca esto: 33,1-33,5 ms por fotograma a 30.
+    WAIT_REG_MEM: espera activa los 2 primeros ms; antes, con vsync, cada
+    vuelta dormia wait/0x100 ms.
+    log_guest_fps: fps, abstand minimo/maximo y fotogramas lentos en el log.
 
-2. src/graphics/graphics_system.cpp - cvar guest_vblank_rate.
+include/rex/graphics/d3d12/command_processor.h
+src/graphics/d3d12/command_processor.cpp
+    Occlusion queries diferidas: el resultado se escribe cuando la GPU del
+    host lo tiene, no se sustituye por "1000 muestras visibles" si aun no
+    estaba; y un desajuste ya no apaga las consultas reales para siempre.
+    Sin esto el sol se veia a traves de los objetos.
 
-   Fija cada cuanto recibe el juego un vblank (0 = la frecuencia del modo de
-   video), igual que framerate_limit en Xenia Canary. MEDIDO: NFS Most Wanted
-   se limita el solo a 30 fps en intro y menus aunque reciba 120 o 1000
-   vblanks por segundo, asi que en esas pantallas no cambia nada. Se deja
-   porque es inocuo con 0 y sirve para probar otros tramos del juego.
-
-3. src/graphics/command_processor.cpp - cvar log_guest_fps.
-
-   Una linea cada 10 s en el log con cuantas veces presenta el juego por
-   segundo. Es la unica medida que dice el ritmo real del guest; el contador
-   de F3 mide el del host.
+src/kernel/xboxkrnl/xboxkrnl_video.cpp
+    Con log_guest_fps, el ritmo de VdSwap visto desde el guest (diagnostico).
 """
 
 import os
@@ -46,101 +50,78 @@ import sys
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BLOQUES = [
-    (
-        "include/rex/platform/fpscr.h",
-        "fpscr: excepciones enmascaradas",
-        "  static inline void setcsr(u32 csr) noexcept { simde_mm_setcsr(csr); }\n",
-        "  // PARCHE LOCAL - FP exceptions always masked. A guest context whose csr was\n"
-        "  // never seeded by InitHost (csr == 0) would otherwise unmask every x87/SSE\n"
-        "  // exception on the first enableFlushMode(), and the next inexact divss\n"
-        "  // kills the process with STATUS_FLOAT_INEXACT_RESULT (0xC000008F).\n"
-        "  static inline void setcsr(u32 csr) noexcept { simde_mm_setcsr(csr | ExceptionMask); }\n",
-    ),
-    (
-        "src/graphics/graphics_system.cpp",
-        "guest_vblank_rate: el cvar",
-        'REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",\n',
-        "// PARCHE LOCAL - ritmo del vblank del guest\n"
-        "//\n"
-        "// Lo mismo que framerate_limit en Xenia Canary: alli ese cvar no limita los\n"
-        "// fps del host, fija cada cuanto se le da un vblank al juego. Un juego que\n"
-        "// presenta cada 2 vblanks -30 fps en una Xbox a 60 Hz- va a 60 fps con 120.\n"
-        "// 0 = la frecuencia del modo de video, como siempre.\n"
-        'REXCVAR_DEFINE_INT32(guest_vblank_rate, 0, "GPU",\n'
-        '                     "Guest vblank rate in Hz (0 = video mode refresh rate with vsync, "\n'
-        '                     "1000 without). A game locked to 30 fps waits two vblanks per frame, so "\n'
-        '                     "120 makes it run at up to 60 fps. Same as framerate_limit in Xenia Canary.")\n'
-        "    .range(0, 1000)\n"
-        "    .lifecycle(rex::cvar::Lifecycle::kHotReload);\n"
-        "\n"
-        'REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",\n',
-    ),
-    (
-        "src/graphics/graphics_system.cpp",
-        "guest_vblank_rate: el hilo del vblank",
-        "        uint64_t vsync_interval_ticks =\n"
-        "            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));\n"
-        "        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);\n"
-        "        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();\n"
-        "        while (vsync_worker_running_) {\n"
-        "          uint64_t current_time = chrono::Clock::QueryGuestTickCount();\n"
-        "          uint64_t interval_ticks =\n"
-        "              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;\n",
-        "        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);\n"
-        "        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();\n"
-        "        while (vsync_worker_running_) {\n"
-        "          uint64_t current_time = chrono::Clock::QueryGuestTickCount();\n"
-        "          // Se relee en cada vuelta: guest_vblank_rate se puede cambiar en marcha.\n"
-        "          int32_t vblank_rate = REXCVAR_GET(guest_vblank_rate);\n"
-        "          double vblank_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;\n"
-        "          uint64_t vsync_interval_ticks =\n"
-        "              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_hz));\n"
-        "          // Con guest_vblank_rate puesto manda el, haya vsync o no: asi el ritmo del\n"
-        "          // juego y la sincronizacion con el monitor se eligen por separado.\n"
-        "          uint64_t interval_ticks = vblank_rate > 0 ? vsync_interval_ticks\n"
-        "                                    : REXCVAR_GET(vsync) ? vsync_interval_ticks\n"
-        "                                                         : no_vsync_interval_ticks;\n",
-    ),
-    (
-        "src/graphics/command_processor.cpp",
-        "log_guest_fps: el cvar",
-        'REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");\n',
-        'REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");\n'
-        "\n"
-        'REXCVAR_DEFINE_BOOL(log_guest_fps, false, "GPU",\n'
-        '                    "Log how many frames per second the game presents, every 10 seconds");\n',
-    ),
-    (
-        "src/graphics/command_processor.cpp",
-        "log_guest_fps: la medida",
-        "  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);\n"
-        "\n"
-        "  ++counter_;\n",
-        "  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);\n"
-        "\n"
-        "  // PARCHE LOCAL - fps del guest en el log\n"
-        "  //\n"
-        "  // Cuantas veces presenta el juego por segundo, medido aqui y no en el host:\n"
-        "  // es lo unico que dice si guest_vblank_rate cambio de verdad el ritmo del\n"
-        "  // juego. Una linea cada 10 s, solo con log_guest_fps.\n"
-        "  if (REXCVAR_GET(log_guest_fps)) {\n"
-        "    static uint64_t window_start = 0;\n"
-        "    static uint32_t swaps = 0;\n"
-        "    const uint64_t now = rex::chrono::Clock::QueryHostTickCount();\n"
-        "    const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();\n"
-        "    if (!window_start) {\n"
-        "      window_start = now;\n"
-        "    }\n"
-        "    ++swaps;\n"
-        "    if (now - window_start >= freq * 10) {\n"
-        '      REXGPU_INFO("[guest fps] {:.1f} swaps/s", swaps * double(freq) / double(now - window_start));\n'
-        "      window_start = now;\n"
-        "      swaps = 0;\n"
-        "    }\n"
-        "  }\n"
-        "\n"
-        "  ++counter_;\n",
-    ),
+    ('include/rex/platform/fpscr.h',
+     'platform/fpscr.h #1',
+     '\n  static inline void setcsr(u32 csr) noexcept { simde_mm_setcsr(csr); }\n\n',
+     '\n  // PARCHE LOCAL - FP exceptions always masked. A guest context whose csr was\n  // never seeded by InitHost (csr == 0) would otherwise unmask every x87/SSE\n  // exception on the first enableFlushMode(), and the next inexact divss\n  // kills the process with STATUS_FLOAT_INEXACT_RESULT (0xC000008F).\n  static inline void setcsr(u32 csr) noexcept { simde_mm_setcsr(csr | ExceptionMask); }\n\n'),
+    ('src/graphics/graphics_system.cpp',
+     'graphics/graphics_system.cpp #1',
+     '    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);\n\n',
+     '    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);\n\n// PARCHE LOCAL - ritmo del vblank del guest\n//\n// Lo mismo que framerate_limit en Xenia Canary: alli ese cvar no limita los\n// fps del host, fija cada cuanto se le da un vblank al juego. Un juego que\n// presenta cada 2 vblanks -30 fps en una Xbox a 60 Hz- va a 60 fps con 120.\n// 0 = la frecuencia del modo de video, como siempre.\nREXCVAR_DEFINE_INT32(guest_vblank_rate, 0, "GPU",\n                     "Guest vblank rate in Hz (0 = video mode refresh rate with vsync, "\n                     "1000 without). A game locked to 30 fps waits two vblanks per frame, so "\n                     "120 makes it run at up to 60 fps. Same as framerate_limit in Xenia Canary.")\n    .range(0, 1000)\n    .lifecycle(rex::cvar::Lifecycle::kHotReload);\n\n'),
+    ('src/graphics/graphics_system.cpp',
+     'graphics/graphics_system.cpp #2',
+     '        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();\n        uint64_t vsync_interval_ticks =\n            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));\n        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);\n',
+     '        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();\n        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);\n'),
+    ('src/graphics/graphics_system.cpp',
+     'graphics/graphics_system.cpp #3',
+     '          uint64_t current_time = chrono::Clock::QueryGuestTickCount();\n          uint64_t interval_ticks =\n              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;\n          while (current_time - last_frame_time >= interval_ticks) {\n',
+     '          uint64_t current_time = chrono::Clock::QueryGuestTickCount();\n          // Se relee en cada vuelta: guest_vblank_rate se puede cambiar en marcha.\n          int32_t vblank_rate = REXCVAR_GET(guest_vblank_rate);\n          double vblank_hz = vblank_rate > 0 ? double(vblank_rate) : refresh_rate_hz;\n          uint64_t vsync_interval_ticks =\n              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / vblank_hz));\n          // Con guest_vblank_rate puesto manda el, haya vsync o no: asi el ritmo del\n          // juego y la sincronizacion con el monitor se eligen por separado.\n          uint64_t interval_ticks = vblank_rate > 0 ? vsync_interval_ticks\n                                    : REXCVAR_GET(vsync) ? vsync_interval_ticks\n                                                         : no_vsync_interval_ticks;\n          while (current_time - last_frame_time >= interval_ticks) {\n'),
+    ('src/graphics/command_processor.cpp',
+     'graphics/command_processor.cpp #1',
+     'REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");\n\n',
+     'REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");\n\nREXCVAR_DEFINE_BOOL(log_guest_fps, false, "GPU",\n                    "Log how many frames per second the game presents, every 10 seconds");\n\n// PARCHE LOCAL - ritmo de los flips\nREXCVAR_DEFINE_INT32(frame_pacing_fps, 0, "GPU",\n                     "Present guest frames at an exact, even rate (e.g. 30 or 60). Combine with "\n                     "a fast guest_vblank_rate so the game never misses a vblank slot. 0 = off.")\n    .range(0, 1000)\n    .lifecycle(rex::cvar::Lifecycle::kHotReload);\n\n'),
+    ('src/graphics/command_processor.cpp',
+     'graphics/command_processor.cpp #2',
+     '\n  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);\n\n',
+     '\n  // PARCHE LOCAL - ritmo de los flips (frame_pacing_fps)\n  //\n  // Con vblank de 60 Hz el juego coloca cada flip en una "ranura" de vblank, y\n  // si llega tarde por un pelo pierde la ranura entera: los flips salian cada\n  // 16,6, 33 o 50 ms en vez de cada 33 -el tiron que se veia a "30 fps"-. La\n  // forma buena es darle vblanks rapidos (guest_vblank_rate alto, no pierde\n  // ninguna) y marcar el ritmo aqui con un reloj preciso: un flip cada\n  // 1/frame_pacing_fps segundos, contando desde el flip PREVISTO y no desde el\n  // real, para que un retraso suelto no desplace a todos los demas.\n  //\n  // MEDIDO en el menu (vblank 1000 Hz, sin vsync): 30 fps con flips cada\n  // 33,1-33,5 ms, 60 fps con 16,4-16,9 ms. Con vsync del host encima vuelve a\n  // haber dos relojes y temblor de un refresco del monitor.\n  if (const int32_t pacing_fps = REXCVAR_GET(frame_pacing_fps); pacing_fps > 0) {\n    static uint64_t next_flip = 0;\n    const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();\n    const uint64_t period = freq / uint64_t(pacing_fps);\n    uint64_t now = rex::chrono::Clock::QueryHostTickCount();\n    // Si vamos mas de un periodo tarde (carga, pausa), se reengancha el reloj.\n    if (!next_flip || now > next_flip + period) {\n      next_flip = now;\n    }\n    if (now < next_flip) {\n      const uint64_t target = next_flip;\n      const double left_ms = double(target - now) * 1000.0 / double(freq);\n      if (left_ms > 1.5) {\n        rex::thread::Sleep(std::chrono::milliseconds(int(left_ms - 1.0)));\n      }\n      while (rex::chrono::Clock::QueryHostTickCount() < target) {\n        rex::thread::MaybeYield();\n      }\n    }\n    next_flip += period;\n  }\n\n  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);\n\n  // PARCHE LOCAL - fps del guest en el log\n  //\n  // Cuantas veces presenta el juego por segundo, medido aqui y no en el host:\n  // es lo unico que dice si guest_vblank_rate cambio de verdad el ritmo del\n  // juego. Una linea cada 10 s, solo con log_guest_fps.\n  if (REXCVAR_GET(log_guest_fps)) {\n    static uint64_t window_start = 0;\n    static uint64_t last_swap = 0;\n    static uint32_t swaps = 0;\n    // La media dice poco de un tiron: se apuntan tambien el abstand minimo y\n    // maximo entre fotogramas y cuantos pasaron de 25 y de 50 ms.\n    static double min_ms = 1e9, max_ms = 0.0;\n    static uint32_t over25 = 0, over50 = 0;\n    const uint64_t now = rex::chrono::Clock::QueryHostTickCount();\n    const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();\n    if (!window_start) {\n      window_start = now;\n    }\n    if (last_swap) {\n      const double ms = double(now - last_swap) * 1000.0 / double(freq);\n      min_ms = std::min(min_ms, ms);\n      max_ms = std::max(max_ms, ms);\n      over25 += ms > 25.0;\n      over50 += ms > 50.0;\n    }\n    last_swap = now;\n    ++swaps;\n    if (now - window_start >= freq * 10) {\n      REXGPU_INFO("[guest fps] {:.1f} swaps/s | frame {:.1f}-{:.1f} ms | >25ms {} | >50ms {}",\n                  swaps * double(freq) / double(now - window_start), min_ms, max_ms, over25,\n                  over50);\n      window_start = now;\n      swaps = 0;\n      min_ms = 1e9;\n      max_ms = 0.0;\n      over25 = over50 = 0;\n    }\n  }\n\n'),
+    ('src/graphics/command_processor.cpp',
+     'graphics/command_processor.cpp #3',
+     '  bool is_memory = (wait_info & 0x10) != 0;\n\n  bool matched = false;\n  do {\n',
+     '  bool is_memory = (wait_info & 0x10) != 0;\n\n  const uint64_t wait_start = rex::chrono::Clock::QueryHostTickCount();\n  bool matched = false;\n  do {\n'),
+    ('src/graphics/command_processor.cpp',
+     'graphics/command_processor.cpp #4',
+     '        PrepareForWait();\n        if (!REXCVAR_GET(vsync)) {\n          // User wants it fast and dangerous.\n          rex::thread::MaybeYield();\n        } else {\n          rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));\n        }\n',
+     '        PrepareForWait();\n        // PARCHE LOCAL - espera activa los 2 primeros ms, y solo despues\n        // dormir 1 ms por vuelta.\n        //\n        // Antes, con vsync, cada vuelta dormia wait/0x100 ms (y el Sleep de\n        // Windows redondea a 15,6 ms si nadie sube la resolucion del reloj).\n        // NFS Most Wanted hace muchas de estas esperas por fotograma y casi\n        // todas se resuelven en microsegundos: la suma de dormidas le costaba\n        // mas de un periodo de vblank por fotograma. MEDIDO: con vsync, 30 fps\n        // y flips cada 16/33/50 ms; sin vsync -que aqui solo cedia el hilo-,\n        // cientos de fps y flips regulares.\n        const double waited_ms =\n            double(rex::chrono::Clock::QueryHostTickCount() - wait_start) * 1000.0 /\n            double(rex::chrono::Clock::QueryHostTickFrequency());\n        if (!REXCVAR_GET(vsync) || waited_ms < 2.0) {\n          rex::thread::MaybeYield();\n        } else {\n          rex::thread::Sleep(std::chrono::milliseconds(1));\n        }\n'),
+    ('include/rex/graphics/d3d12/command_processor.h',
+     'd3d12/command_processor.h #1',
+     '\n  Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,\n',
+     '\n  // PARCHE LOCAL - occlusion queries diferidas: al quedarse sin comandos, o\n  // cuando el guest espera un registro, se entregan los resultados pendientes.\n  void PrepareForWait() override;\n\n  Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,\n'),
+    ('include/rex/graphics/d3d12/command_processor.h',
+     'd3d12/command_processor.h #2',
+     '  void DisableHostOcclusionQueries();\n  uint64_t NormalizeOcclusionSamples(uint64_t samples) const;\n',
+     '  void DisableHostOcclusionQueries();\n  // PARCHE LOCAL - occlusion queries diferidas.\n  void AbandonActiveOcclusionQuery();\n  void ProcessPendingOcclusionQueries(bool wait);\n  uint64_t NormalizeOcclusionSamples(uint64_t samples) const;\n'),
+    ('include/rex/graphics/d3d12/command_processor.h',
+     'd3d12/command_processor.h #3',
+     '  } active_occlusion_query_;\n  struct VertexBufferState {\n',
+     '  } active_occlusion_query_;\n  // PARCHE LOCAL - occlusion queries diferidas: terminadas en la GPU del host\n  // pero con el resultado todavia sin escribir en la memoria del guest, que\n  // mientras tanto conserva la marca 0xFFFFFEED ("aun no esta").\n  struct PendingOcclusionQuery {\n    uint32_t sample_count_address = 0;\n    uint32_t host_index = 0;\n    uint64_t submission = 0;\n  };\n  std::deque<PendingOcclusionQuery> pending_occlusion_queries_;\n  struct VertexBufferState {\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #1',
+     '\n  uint32_t sample_count_addr = register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR];\n',
+     '\n  // Entregar lo que la GPU del host ya haya terminado.\n  ProcessPendingOcclusionQueries(false);\n\n  uint32_t sample_count_addr = register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR];\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #2',
+     '\n  if (!is_end) {\n    if (active_occlusion_query_.valid &&\n        active_occlusion_query_.sample_count_address != sample_count_addr) {\n      DisableHostOcclusionQueries();\n      return write_fallback_result();\n    }\n',
+     '\n  // PARCHE LOCAL - un inicio o un final que no casa con la consulta activa ya\n  // no apaga las consultas de verdad para siempre (DisableHostOcclusionQueries):\n  // solo se pierde esa consulta. Antes, el primer desajuste dejaba el resto de\n  // la partida con el valor falso de "1000 muestras visibles", y el sol se veia\n  // a traves de los objetos.\n  if (!is_end) {\n    if (active_occlusion_query_.valid) {\n      AbandonActiveOcclusionQuery();\n    }\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #3',
+     '      active_occlusion_query_.sample_count_address != sample_count_addr) {\n    DisableHostOcclusionQueries();\n    return write_fallback_result();\n',
+     '      active_occlusion_query_.sample_count_address != sample_count_addr) {\n    AbandonActiveOcclusionQuery();\n    return write_fallback_result();\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #4',
+     '  DisableHostOcclusionQueries();\n\n',
+     '  DisableHostOcclusionQueries();\n  pending_occlusion_queries_.clear();\n\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #5',
+     '  if (active_occlusion_query_.valid) {\n    REXGPU_WARN(\n        "D3D12CommandProcessor: Occlusion query begin issued while another query is active");\n    DisableHostOcclusionQueries();\n    return false;\n  }\n',
+     '  if (active_occlusion_query_.valid) {\n    AbandonActiveOcclusionQuery();\n  }\n'),
+    ('src/graphics/d3d12/command_processor.cpp',
+     'd3d12/command_processor.cpp #6',
+     '\n  uint64_t query_submission = submission_current_ ? submission_current_ - 1 : 0;\n  CheckSubmissionFence(query_submission);\n  if (submission_completed_ < query_submission) {\n    return false;\n  }\n  if (!occlusion_query_readback_mapping_) {\n    return false;\n  }\n\n  uint64_t samples = occlusion_query_readback_mapping_[host_index];\n  samples = NormalizeOcclusionSamples(samples);\n  WriteGuestOcclusionResult(sample_counts, samples);\n  return true;\n}\n',
+     '\n  // PARCHE LOCAL - resultado diferido.\n  //\n  // Antes se miraba la valla justo despues de enviar el trabajo, y como la GPU\n  // va por detras casi nunca estaba terminado: se caia al valor falso de\n  // "visible" practicamente siempre. En la Xbox el resultado tampoco es\n  // inmediato: la memoria conserva la marca 0xFFFFFEED hasta que la GPU\n  // escribe la cuenta, y el juego vuelve a preguntar. Asi que aqui se hace lo\n  // mismo: se deja la marca y se escribe cuando la GPU del host termina.\n  (void)sample_counts;\n  PendingOcclusionQuery pending;\n  pending.sample_count_address = sample_count_address;\n  pending.host_index = host_index;\n  pending.submission = submission_current_ ? submission_current_ - 1 : 0;\n  pending_occlusion_queries_.push_back(pending);\n  ProcessPendingOcclusionQueries(false);\n  return true;\n}\n\nvoid D3D12CommandProcessor::AbandonActiveOcclusionQuery() {\n  if (!active_occlusion_query_.valid) {\n    return;\n  }\n  uint32_t host_index = active_occlusion_query_.host_index;\n  active_occlusion_query_ = {};\n  if (occlusion_query_heap_ && BeginSubmission(true)) {\n    deferred_command_list_.D3DEndQuery(occlusion_query_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION,\n                                       host_index);\n  }\n}\n\nvoid D3D12CommandProcessor::ProcessPendingOcclusionQueries(bool wait) {\n  if (pending_occlusion_queries_.empty()) {\n    return;\n  }\n  const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);\n  CheckSubmissionFence(0);\n  while (!pending_occlusion_queries_.empty()) {\n    const PendingOcclusionQuery p = pending_occlusion_queries_.front();\n    if (submission_completed_ < p.submission) {\n      if (!wait) {\n        break;\n      }\n      CheckSubmissionFence(p.submission);\n      if (submission_completed_ < p.submission) {\n        break;\n      }\n    }\n    pending_occlusion_queries_.pop_front();\n    auto* sample_counts =\n        memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(p.sample_count_address);\n    if (!sample_counts || !occlusion_query_readback_mapping_) {\n      continue;\n    }\n    // Solo si el guest sigue esperando este resultado (la marca sigue ahi). Si\n    // ya reutilizo la memoria para otra consulta, no se pisa.\n    bool waiting = sample_counts->ZPass_A == kQueryFinished ||\n                   sample_counts->ZPass_B == kQueryFinished ||\n                   sample_counts->ZFail_A == kQueryFinished ||\n                   sample_counts->ZFail_B == kQueryFinished;\n    if (!waiting) {\n      continue;\n    }\n    uint64_t samples = NormalizeOcclusionSamples(occlusion_query_readback_mapping_[p.host_index]);\n    WriteGuestOcclusionResult(sample_counts, samples);\n  }\n}\n\nvoid D3D12CommandProcessor::PrepareForWait() {\n  CommandProcessor::PrepareForWait();\n  // El guest se queda esperando -sin comandos nuevos o en un WAIT_REG_MEM-:\n  // puede que este esperando justo uno de estos resultados, asi que se espera\n  // a la GPU y se entregan todos.\n  ProcessPendingOcclusionQueries(true);\n}\n'),
+    ('src/kernel/xboxkrnl/xboxkrnl_video.cpp',
+     'xboxkrnl/xboxkrnl_video.cpp #1',
+     '                  mapped_u32 height) {\n  // All of these parameters are REQUIRED.\n',
+     '                  mapped_u32 height) {\n  // PARCHE LOCAL - ritmo de VdSwap visto desde el guest (diagnostico, con\n  // log_guest_fps). Compararlo con el del procesador de comandos dice si los\n  // tirones los mete el juego o los mete la emulacion de la GPU.\n  static bool log_fps = rex::cvar::GetFlagInfo("log_guest_fps") != nullptr;\n  if (log_fps && rex::cvar::Query<bool>("log_guest_fps")) {\n    using clk = std::chrono::steady_clock;\n    static clk::time_point window_start{}, last{};\n    static uint32_t swaps = 0, over25 = 0, over50 = 0;\n    static double min_ms = 1e9, max_ms = 0.0;\n    const auto now = clk::now();\n    if (window_start == clk::time_point{}) window_start = now;\n    if (last != clk::time_point{}) {\n      const double ms = std::chrono::duration<double, std::milli>(now - last).count();\n      min_ms = std::min(min_ms, ms);\n      max_ms = std::max(max_ms, ms);\n      over25 += ms > 25.0;\n      over50 += ms > 50.0;\n    }\n    last = now;\n    ++swaps;\n    const double win = std::chrono::duration<double>(now - window_start).count();\n    if (win >= 10.0) {\n      REXKRNL_INFO("[VdSwap fps] {:.1f} swaps/s | frame {:.1f}-{:.1f} ms | >25ms {} | >50ms {}",\n                   swaps / win, min_ms, max_ms, over25, over50);\n      window_start = now;\n      swaps = over25 = over50 = 0;\n      min_ms = 1e9;\n      max_ms = 0.0;\n    }\n  }\n\n  // All of these parameters are REQUIRED.\n'),
 ]
 
 

@@ -170,11 +170,50 @@ class NfsmwApp : public rex::ReXApp {
   //                          todavia no se ha dibujado ni un fotograma.
   // ==========================================================================
   void OnPostInitLogging() override {
+    SubirResolucionDelTemporizador();
     // Sin plugin de GPU la pantalla se queda negra: el juego corre, pero el
     // runtime descarta sus llamadas graficas con "no GPU emulation loaded".
     PonerSiNadieLoPidio("gpu_plugin", "xenos");
     // Teclado y raton ademas del mando.
     PonerSiNadieLoPidio("mnk_mode", "true");
+  }
+
+  // ==========================================================================
+  //  RESOLUCION DEL TEMPORIZADOR DE WINDOWS: 0,5 ms
+  //
+  //  El SDK duerme con ::Sleep(ms) -el hilo que da los vblank al juego, las
+  //  esperas del procesador de comandos, KeDelayExecutionThread-, y nadie
+  //  pedia mas resolucion al temporizador. Con la de fabrica de Windows,
+  //  Sleep(1) dura hasta 15,6 ms: los vblank llegaban a rafagas cada 15,6 ms en
+  //  vez de uno cada 16,7 o 8,3 ms, y con vsync el juego iba a tirones -muy por
+  //  debajo de 30 fps de sensacion- y a 60 no pasaba de 38 aunque sin vsync
+  //  daba 100. Xenia hace lo mismo que esto (win32_high_resolution_timer).
+  //
+  //  Windows 11 ademas ignora la peticion si la ventana esta tapada o
+  //  minimizada salvo que el proceso diga que le importa: por eso el
+  //  SetProcessInformation.
+  // ==========================================================================
+  static void SubirResolucionDelTemporizador() {
+#if defined(_WIN32)
+    using NtSetTimerResolutionFn = LONG(WINAPI*)(ULONG, BOOLEAN, PULONG);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    auto set_res = ntdll ? reinterpret_cast<NtSetTimerResolutionFn>(
+                               GetProcAddress(ntdll, "NtSetTimerResolution"))
+                         : nullptr;
+    ULONG actual = 0;
+    if (set_res && set_res(5000, TRUE, &actual) == 0) {  // 100 ns unidades: 0,5 ms
+      REXLOG_INFO("[temporizador] resolucion {:.2f} ms", actual / 10000.0);
+    } else {
+      REXLOG_WARN("[temporizador] no se pudo subir la resolucion; Sleep(1) puede durar 15 ms");
+    }
+#if defined(PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION)
+    PROCESS_POWER_THROTTLING_STATE estado = {};
+    estado.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    estado.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    estado.StateMask = 0;  // 0 = NO ignorar la resolucion pedida
+    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &estado, sizeof(estado));
+#endif
+#endif
   }
 
   void OnPostSetup() override {

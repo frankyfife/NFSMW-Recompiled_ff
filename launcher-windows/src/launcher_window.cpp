@@ -395,7 +395,8 @@ QWidget* LauncherWindow::buildContent() {
   cr->addWidget(customFps_);
   cr->addWidget(fpsNote_, 1);
   frame->addRow(QStringLiteral("Custom fps"), customRow);
-  vsync_ = new ToggleSwitch(QStringLiteral("V-Sync (sync to the display, no tearing)"));
+  vsync_ = new ToggleSwitch(
+      QStringLiteral("V-Sync (no tearing, slight judder; G-Sync/FreeSync is better)"));
   frame->addWide(vsync_);
   connect(fps_, &Segmented::currentIndexChanged, this, onChange);
   connect(customFps_, &QSpinBox::valueChanged, this, onChange);
@@ -518,10 +519,11 @@ void LauncherWindow::loadSettings() {
   }
   blackEdition_->setChecked(s.value("game/black_edition", true).toBool());
 
-  const QString fps = s.value("frame/mode", "30").toString();
+  const QString fps = s.value("frame/mode", "60").toString();
   fps_->setCurrentIndex(fps == "60" ? 1 : fps == "unlimited" ? 2 : fps == "custom" ? 3 : 0);
   customFps_->setValue(s.value("frame/fps", 60).toInt());
-  vsync_->setChecked(s.value("frame/vsync", true).toBool());
+  // v2: V-Sync off by default -it measured worse- and the old key is ignored.
+  vsync_->setChecked(s.value("frame/vsync2", false).toBool());
 
   aa_->setCurrentIndex(std::max<qsizetype>(0, kAaValues.indexOf(s.value("image/aa", "none").toString())));
   const qsizetype an = kAnisoValues.indexOf(s.value("image/anisotropic", 4).toInt());
@@ -550,7 +552,7 @@ void LauncherWindow::saveSettings() const {
   static const char* const kFpsModes[] = {"30", "60", "unlimited", "custom"};
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
-  s.setValue("frame/vsync", vsync_->isChecked());
+  s.setValue("frame/vsync2", vsync_->isChecked());
   s.setValue("image/aa", kAaValues[aa_->currentIndex()]);
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
@@ -602,44 +604,59 @@ QString LauncherWindow::outputResolution() const {
   return QString::fromLatin1(kResolutions[i].value);
 }
 
+// Every value goes as --name=value. MEASURED: with "--name value" the cvars
+// that live in the GPU plugin DLL (frame_pacing_fps, guest_vblank_rate) were
+// silently left at their defaults.
 QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
+  const auto opt = [](const char* name, const QString& value) {
+    return QStringLiteral("--%1=%2").arg(QLatin1String(name), value);
+  };
+  const auto flag = [](const char* name, bool on) {
+    return QStringLiteral("--%1=%2").arg(QLatin1String(name), on ? "true" : "false");
+  };
+
   QStringList a;
-  a << "--log_level" << "info";
-  a << "--log_file" << QDir::toNativeSeparators(runLog_);
-  a << "--game_data_root" << QDir::toNativeSeparators(gameDir);
-  a << "--gpu_plugin" << "xenos";
-  a << "--mnk_mode";
-  a << "--readback_resolve=fast";  // without it the image comes out washed out
+  a << opt("log_level", "info");
+  a << opt("log_file", QDir::toNativeSeparators(runLog_));
+  a << opt("game_data_root", QDir::toNativeSeparators(gameDir));
+  a << opt("gpu_plugin", "xenos");
+  a << flag("mnk_mode", true);
+  a << opt("readback_resolve", "fast");  // without it the image comes out washed out
 
   // Always passed: the command line wins over nfsmw.toml, so an API picked in
   // the F4 menu that shows a black screen can never lock the game out.
-  a << QStringLiteral("--gpu_backend=%1").arg(api_->currentIndex() == 1 ? "vulkan" : "d3d12");
+  a << opt("gpu_backend", api_->currentIndex() == 1 ? "vulkan" : "d3d12");
 
-  a << "--resolution" << outputResolution();
-  a << "--resolution_scale" << QString::number(scale_->currentIndex() + 1);
-  a << QStringLiteral("--fullscreen=%1").arg(mode_->currentIndex() == 0 ? "true" : "false");
-  a << "--monitor" << QString::number(std::max(0, monitor_->currentIndex()));
+  a << opt("resolution", outputResolution());
+  a << opt("resolution_scale", QString::number(scale_->currentIndex() + 1));
+  a << flag("fullscreen", mode_->currentIndex() == 0);
+  a << opt("monitor", QString::number(std::max(0, monitor_->currentIndex())));
 
-  // The game presents every second vblank, so the vblank rate is twice the
-  // target; "unlimited" gives it a vblank every millisecond. V-Sync only
-  // decides whether presentation waits for the display.
-  const int fps = targetFps();
-  a << QStringLiteral("--vsync=%1").arg(vsync_->isChecked() ? "true" : "false");
-  a << "--guest_vblank_rate" << QString::number(fps == 0 ? 1000 : fps * 2);
-  a << "--max_fps" << "0";
+  // Frame pacing. At the console's 60 Hz vblank the game schedules each flip
+  // into a vblank slot and a frame that is a hair late loses the whole slot
+  // (flips every 16/33/50 ms instead of 33). So the game gets a vblank every
+  // millisecond -it never misses a slot- and the pace is set by
+  // frame_pacing_fps, a precise clock in the GPU thread: measured 33.1-33.5 ms
+  // per frame at 30 and 16.4-16.9 ms at 60. V-Sync only decides whether the
+  // host waits for the display; it adds a second clock and some judder, so
+  // it is off by default (G-Sync/FreeSync removes the tearing).
+  a << flag("vsync", vsync_->isChecked());
+  a << opt("guest_vblank_rate", "1000");
+  a << opt("frame_pacing_fps", QString::number(targetFps()));
+  a << opt("max_fps", "0");
 
-  a << QStringLiteral("--swap_post_effect=%1").arg(kAaValues[aa_->currentIndex()]);
-  a << "--anisotropic_override" << QString::number(kAnisoValues[aniso_->currentIndex()]);
+  a << opt("swap_post_effect", kAaValues[aa_->currentIndex()]);
+  a << opt("anisotropic_override", QString::number(kAnisoValues[aniso_->currentIndex()]));
   if (filter_->currentIndex() != 0) {
-    a << QStringLiteral("--present_effect=%1").arg(kFilterValues[filter_->currentIndex()]);
+    a << opt("present_effect", kFilterValues[filter_->currentIndex()]);
   }
-  a << "--present_cas_additional_sharpness" << QString::number(sharpness_->value() / 100.0, 'f', 2);
-  if (edram_->currentIndex() == 1) a << "--render_target_path_d3d12=rtv";
-  if (edram_->currentIndex() == 2) a << "--render_target_path_d3d12=rov";
+  a << opt("present_cas_additional_sharpness", QString::number(sharpness_->value() / 100.0, 'f', 2));
+  if (edram_->currentIndex() == 1) a << opt("render_target_path_d3d12", "rtv");
+  if (edram_->currentIndex() == 2) a << opt("render_target_path_d3d12", "rov");
 
   const QString lang = QString::fromLatin1(kLanguages[language_->currentIndex()].value);
   if (lang != QLatin1String("0")) {
-    a << "--user_language" << lang;
+    a << opt("user_language", lang);
   }
   a << QStringLiteral("--black_edition=%1").arg(blackEdition_->isChecked() ? "true" : "false");
   a << QStringLiteral("--async_shader_compilation=%1")
@@ -683,13 +700,14 @@ void LauncherWindow::refresh() {
 
   customFps_->setEnabled(fps_->currentIndex() == 3);
   const int fps = targetFps();
-  if (fps == 30) {
-    setNote(fpsNote_, QStringLiteral("Console timing, as shipped. Smoothest."));
-  } else {
-    setNote(fpsNote_,
-            QStringLiteral("Experimental: the game reaches what the emulation allows; menus "
-                           "stay at 30. Physics run on real time, so speed is unaffected."),
+  if (fps == 0) {
+    setNote(fpsNote_, QStringLiteral("As fast as the PC allows. Physics run on real time, so "
+                                     "game speed is unaffected."),
             "warn");
+  } else {
+    setNote(fpsNote_, QStringLiteral("Evenly paced at %1 fps. Physics run on real time, so game "
+                                     "speed is the same at any frame rate.")
+                          .arg(fps));
   }
 
   const bool sharpen = filter_->currentIndex() != 0;
