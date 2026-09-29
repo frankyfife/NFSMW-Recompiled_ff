@@ -12,6 +12,10 @@
 
 #include <functional>
 
+// Escribe la bandera Black Edition (byte 0x82A2CE06) en la memoria del guest.
+// Vale tanto al cargar el XEX como en vivo desde el menu.
+bool AplicarBlackEdition(bool activo);
+
 class NfsmwMenuDialog : public rex::ui::ImGuiDialog {
  public:
   struct Callbacks {

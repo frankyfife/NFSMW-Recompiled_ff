@@ -206,6 +206,14 @@ if errorlevel 1 (
     echo [ERROR] No se pudo anadir el ajuste de privilegios. Me detengo.
     goto fin
 )
+rem Los de este fork: excepciones de coma flotante enmascaradas (sin esto el
+rem juego muere con 0xC000008F antes del menu), guest_vblank_rate y el log de
+rem fps del guest. Ver la cabecera de tools\parche_ff.py.
+%PY% "%~dp0tools\parche_ff.py"
+if errorlevel 1 (
+    echo [ERROR] No se pudieron aplicar los parches del fork. Me detengo.
+    goto fin
+)
 echo.
 
 echo ############################################
@@ -261,6 +269,21 @@ set "DIRREL=%~dp0app\out\build\win-amd64-release"
 if exist "%DIRREL%\.ninja_lock" del /q "%DIRREL%\.ninja_lock" >nul 2>&1
 
 pushd "app"
+
+rem En un clon limpio no existe generated\rexglue.cmake, y CMakeLists.txt lo
+rem incluye antes de definir el target del codegen: sin este paso la
+rem configuracion falla ("include could not find requested file"). El CLI del
+rem SDK lo genera junto con el C++.
+if not exist "generated\rexglue.cmake" (
+    echo -- Primer codegen: generated\rexglue.cmake no existe todavia --
+    "%SDKBIN%\rexglue.exe" codegen nfsmw_manifest.toml
+    if errorlevel 1 (
+        popd
+        echo [ERROR] El primer codegen fallo. Esta assets\default.xex en su sitio?
+        goto fin
+    )
+)
+
 cmake --preset win-amd64-release
 
 rem ---------------------------------------------------------------------------
@@ -329,8 +352,15 @@ rem
 rem  Si falla, la carpeta sigue sirviendo: el juego estara como nfsmw.exe o como
 rem  NFS_Most_Wanted.exe y LANZADOR.bat funciona igual. Por eso no se aborta.
 echo -- Lanzador --
-call "%~dp0CONSTRUIR_LANZADOR.bat" /silencioso
+rem Primero el de Qt (launcher-windows\). Si no hay Qt instalado, el de
+rem C#/WinForms de siempre, que no necesita nada.
+call "%~dp0launcher-windows\build.bat" /silencioso
 set "SALIDA=!errorlevel!"
+if not "!SALIDA!"=="0" (
+    echo [aviso] Sin el lanzador de Qt; construyo el de C#.
+    call "%~dp0CONSTRUIR_LANZADOR.bat" /silencioso
+    set "SALIDA=!errorlevel!"
+)
 if not "!SALIDA!"=="0" (
     echo [aviso] No se pudo construir el lanzador ^(codigo !SALIDA!^).
     echo         La carpeta sigue valiendo: se juega con LANZADOR.bat.

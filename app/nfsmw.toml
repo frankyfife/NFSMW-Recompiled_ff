@@ -80,3 +80,12 @@ video_mode_width  = 1920
 video_mode_height = 1080
 resolution_scale  = 2
 anisotropic_override = 5
+
+
+# ----------------------------------------------------------------------------
+#  Sprache / idioma: 1 = English, 3 = Deutsch, 4 = Francais, 5 = Espanol
+# ----------------------------------------------------------------------------
+user_language = 3
+
+# Black Edition: Byte 0x82A2CE06 (auch live im ESC-Menue umschaltbar).
+black_edition = true

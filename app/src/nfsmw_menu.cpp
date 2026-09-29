@@ -13,6 +13,9 @@
 #include "nfsmw_menu.h"
 
 #include <rex/cvar.h>
+#include <rex/logging.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 
 #include <imgui.h>
 
@@ -28,12 +31,41 @@
 // ---------------------------------------------------------------------------
 //  Cvar del proyecto: contenido Black Edition.
 //
-//  El parche se aplica al cargar el XEX (OnPostLoadXexImage en nfsmw_app.h),
-//  por eso este flag exige reinicio para activarse o desactivarse.
+//  Se aplica al cargar el XEX (OnPostLoadXexImage en nfsmw_app.h) y tambien en
+//  vivo desde el menu: la bandera es un byte que el juego relee cada vez que
+//  la consulta, asi que basta con escribirlo.
 // ---------------------------------------------------------------------------
 REXCVAR_DEFINE_BOOL(black_edition, true, "Contenido",
-                    "Contenido Black Edition: coches de pago como descargables (requiere reinicio)")
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+                    "Contenido Black Edition: coches de pago como descargables")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+// La patch de Xenia es  be32 0x82A2CE04 = 0x00000100, es decir, en la memoria
+// del guest (big-endian) los bytes 00 00 01 00: la bandera es el BYTE
+// 0x82A2CE06. El getter del juego es sub_822C62E0: lbz r3,-12794(0x82A30000).
+//
+// La version anterior escribia un uint32_t 0x00000100 del host sobre 0x82A2CE04.
+// El host es little-endian, asi que quedaban 00 01 00 00: ponia a 1 el byte
+// 0x82A2CE05 -otra bandera, la que lee sub_822CBC08- y no la de Black Edition.
+// Con eso "Nueva partida" reventaba en sub_822CC308 (coche que no esta en
+// FEPlayerCarDB -> lectura de la direccion 8). Por eso aqui se toca un byte.
+constexpr uint32_t kBlackEditionByte = 0x82A2CE06u;
+
+bool AplicarBlackEdition(bool activo) {
+  auto* kernel = rex::system::kernel_state();
+  if (kernel == nullptr || kernel->memory() == nullptr) {
+    REXLOG_WARN("[black-edition] sin kernel de memoria; no se puede parchear.");
+    return false;
+  }
+  auto* bandera = kernel->memory()->TranslateVirtual<uint8_t*>(kBlackEditionByte);
+  if (bandera == nullptr) {
+    REXLOG_WARN("[black-edition] no se pudo traducir 0x{:08X}.", kBlackEditionByte);
+    return false;
+  }
+  *bandera = activo ? 1 : 0;
+  REXLOG_INFO("[black-edition] byte 0x{:08X} = {} ({}).", kBlackEditionByte, *bandera,
+              activo ? "contenido desbloqueado" : "contenido oculto");
+  return true;
+}
 
 namespace {
 
@@ -367,11 +399,14 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     bool black = CvarB("black_edition");
     if (ImGui::Checkbox("Contenido Black Edition", &black)) {
       SetCvarB("black_edition", black);
+      AplicarBlackEdition(black);
       Persistir();
     }
-    MarcaReinicioConAviso(
-        "Desbloquea los coches de pago (edición Black) como descargables en el "
-        "concesionario del garaje.");
+    MarcaVivo("(se aplica al instante)");
+    ImGui::TextColored(ImColor(kTextoAtenuado),
+                       "Desbloquea los coches de pago (edición Black) como descargables en el "
+                       "concesionario del garaje.");
+    ImGui::Spacing();
 
     if (ExisteCvar("grant_user_privileges")) {
       bool gp = CvarB("grant_user_privileges");

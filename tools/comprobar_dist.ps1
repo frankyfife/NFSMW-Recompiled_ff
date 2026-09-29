@@ -109,7 +109,10 @@ $deWindows = @(
     # mscoree.dll, el arranque del Common Language Runtime. Viene con Windows
     # desde el XP SP3. Sin esto en la lista, la comprobacion daba la carpeta por
     # rota justo despues de armarla bien.
-    'mscoree.dll','mscoreei.dll'
+    'mscoree.dll','mscoreei.dll',
+    # El lanzador de Qt: Qt6Core y Qt6Gui tiran de estas, todas de System32.
+    'authz.dll','dwrite.dll','mpr.dll','netapi32.dll','d3d9.dll','dxgidebug.dll',
+    'userenv.dll','wtsapi32.dll','winspool.drv','comctl32.dll','d2d1.dll','dcomp.dll'
 )
 
 $enCarpeta = @{}
@@ -203,8 +206,16 @@ Write-Host ''
 
 # ---- ISO --------------------------------------------------------------------
 Write-Host 'ISO'
+# game_root\ es la ISO ya extraida: el juego la usa si no hay ninguna .iso
+# (ver OnConfigurePaths en nfsmw_app.h) y el lanzador la elige solo.
+$extraida = Test-Path -LiteralPath (Join-Path $Dist 'game_root\default.xex')
+if ($extraida) {
+    Write-Host '   [ok] game_root\  (ISO ya extraida)'
+}
 if ($isos.Count -eq 0) {
-    Write-Host '   [  ] No hay ninguna. Hay que copiarla aqui antes de jugar.' -ForegroundColor DarkYellow
+    if (-not $extraida) {
+        Write-Host '   [  ] No hay ninguna. Hay que copiarla aqui antes de jugar.' -ForegroundColor DarkYellow
+    }
 } else {
     foreach ($i in $isos) {
         Write-Host ("   [ok] {0}  ({1} GB)" -f $i.Name, [Math]::Round($i.Length/1GB,1))
@@ -243,7 +254,7 @@ if ($problemas.Count -eq 0) {
     Write-Host ''
     Write-Host '  Se puede copiar a un equipo sin Visual Studio, CMake, Ninja'
     Write-Host '  ni SDK y deberia arrancar con doble clic.'
-    if ($isos.Count -eq 0) {
+    if ($isos.Count -eq 0 -and -not $extraida) {
         Write-Host ''
         Write-Host '  Acuerdate de copiar tambien la ISO.'
     }

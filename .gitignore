@@ -78,3 +78,8 @@ __pycache__/
 # Los parches actuales aplican y revierten por texto y no dejan .original, pero
 # algunos del SDK todavia los generan.
 *.original
+
+# --- Lanzador de Qt (launcher-windows) ------------------------------------------
+launcher-windows/out/
+launcher.ini
+game_root_cache/

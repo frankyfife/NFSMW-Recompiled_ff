@@ -27,7 +27,24 @@ endif()
 # ---- Empezar de cero --------------------------------------------------------
 #  Ademas de evitar restos, borra de corridas anteriores logs\, matriz\,
 #  shaders\ y cache\, que son de esta maquina y no deben viajar.
-file(REMOVE_RECURSE "${D_DIST}")
+#
+#  MENOS los datos del juego y los ajustes del lanzador: game_root\ y
+#  game_root_cache\ son la ISO extraida (7 GB, minutos en rehacerla), y las ISO
+#  y launcher.ini los puso el usuario. Borrarlos en cada build obligaba a
+#  sacarlos a mano antes y devolverlos despues. El juego y el lanzador si se
+#  borran: se rehacen justo despues.
+set(CONSERVAR game_root game_root_cache launcher.ini lanzador.json portada.jpg)
+if(EXISTS "${D_DIST}")
+    file(GLOB HIJOS LIST_DIRECTORIES true "${D_DIST}/*")
+    foreach(hijo IN LISTS HIJOS)
+        get_filename_component(nombre "${hijo}" NAME)
+        string(TOLOWER "${nombre}" nombre_min)
+        if(nombre IN_LIST CONSERVAR OR nombre_min MATCHES "\\.iso$")
+            continue()
+        endif()
+        file(REMOVE_RECURSE "${hijo}")
+    endforeach()
+endif()
 file(MAKE_DIRECTORY "${D_DIST}")
 
 # ---- El juego ---------------------------------------------------------------

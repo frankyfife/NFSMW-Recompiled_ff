@@ -45,16 +45,41 @@ Write-Host "== ReXGlue SDK ==" -ForegroundColor Cyan
 
 $sdk = Join-Path (Split-Path -Parent $root) "rexglue-sdk"
 
-if (Test-Path $sdk) {
-    Write-Host "  Ya existe en $sdk - actualizando"
-    Push-Location $sdk
-    git pull --ff-only
-    git submodule update --init --recursive
-    Pop-Location
-} else {
+# Los parches de tools\ buscan texto exacto de ESTA version del SDK (v0.10.0).
+# Con un "git pull" a lo que haya en main, cualquier anclaje puede dejar de
+# aparecer y CONSTRUIR.bat se para en el paso 1.
+$sdkCommit = "c94f5eb"
+
+if (-not (Test-Path $sdk)) {
     Write-Host "  Clonando en $sdk"
-    git clone --recursive https://github.com/rexglue/rexglue-sdk.git $sdk
+    git clone https://github.com/rexglue/rexglue-sdk.git $sdk
 }
+Push-Location $sdk
+git fetch --quiet origin
+git checkout --quiet $sdkCommit
+git submodule update --init --recursive
+
+# thirdparty\libmspack trae enlaces simbolicos de git. Sin permiso para crear
+# symlinks (lo normal en Windows sin modo desarrollador) se quedan como
+# ficheros de texto con la ruta dentro, y lzxd.c no compila:
+#     lzxd.c:1:1: error: expected identifier or '('
+# Se sustituyen por copias del fichero al que apuntan.
+$mspack = Join-Path $sdk "thirdparty\libmspack"
+if (Test-Path $mspack) {
+    $links = git -C $mspack ls-files -s | Where-Object { $_ -match '^120000 ' } |
+        ForEach-Object { ($_ -split "`t", 2)[1] }
+    foreach ($rel in $links) {
+        $f = Join-Path $mspack $rel
+        if ((Test-Path $f) -and (Get-Item $f).Length -lt 256) {
+            $target = Join-Path (Split-Path $f) ((Get-Content $f -Raw).Trim())
+            if (Test-Path $target -PathType Leaf) {
+                Copy-Item $target $f -Force
+                git -C $mspack update-index --assume-unchanged $rel
+            }
+        }
+    }
+}
+Pop-Location
 
 Push-Location $sdk
 Write-Host ""

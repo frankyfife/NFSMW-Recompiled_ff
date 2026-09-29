@@ -64,6 +64,14 @@ if exist "%VSNINJA%\ninja.exe" set "PATH=%VSNINJA%;%PATH%"
 if exist "%VSCMAKE%\cmake.exe" set "PATH=%VSCMAKE%;%PATH%"
 if exist "%VSLLVM%\clang.exe"  set "PATH=%VSLLVM%;%PATH%"
 
+rem Sin el componente Clang de Visual Studio: el LLVM oficial en Program Files.
+rem Si tampoco esta en el PATH, CMake no encuentra "clang" y la configuracion
+rem del SDK falla en la primera linea.
+if not exist "%VSLLVM%\clang.exe" (
+    where clang >nul 2>nul
+    if errorlevel 1 if exist "%PF%\LLVM\bin\clang.exe" set "PATH=%PF%\LLVM\bin;%PATH%"
+)
+
 rem El SDK instalado
 set "SDK=%~dp0..\..\rexglue-sdk"
 set "SDKBIN=%SDK%\out\install\win-amd64\bin"

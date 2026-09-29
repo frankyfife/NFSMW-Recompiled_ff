@@ -493,27 +493,14 @@ class NfsmwApp : public rex::ReXApp {
   //  5. PARCHE BLACK EDITION + EL MENU DE AJUSTES (ESC)
   // ==========================================================================
 
+  // La escritura vive en nfsmw_menu.cpp (AplicarBlackEdition), porque el menu
+  // tambien la usa en vivo. Ver alli por que es un byte y no un be32.
   void AplicarParcheBlackEdition() {
-    constexpr uint32_t kBlackEditionAddr = 0x82A2CE04u;  // edicion PAL (454107D9)
-    auto* kernel = rex::system::kernel_state();
-    if (kernel == nullptr || kernel->memory() == nullptr) {
-      REXLOG_WARN("[black-edition] sin kernel de memoria; no se puede parchear.");
-      return;
-    }
     if (!REXCVAR_GET(black_edition)) {
       REXLOG_INFO("[black-edition] desactivado (black_edition=false).");
       return;
     }
-    auto* bandera = kernel->memory()->TranslateVirtual<uint32_t*>(kBlackEditionAddr);
-    if (bandera == nullptr) {
-      REXLOG_WARN("[black-edition] no se pudo traducir 0x{:08X}; el contenido "
-                  "Black Edition seguira oculto.", kBlackEditionAddr);
-      return;
-    }
-    // La memoria del guest se expone en big-endian: el valor se escribe tal cual.
-    *bandera = 0x00000100u;
-    REXLOG_INFO("[black-edition] bandera 0x{:08X} = 0x{:08X} (contenido desbloqueado).",
-                kBlackEditionAddr, *bandera);
+    AplicarBlackEdition(true);
   }
 
   void AlternarMenu() {
