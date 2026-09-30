@@ -48,15 +48,16 @@ struct FramePacerTiming {
 // propio de 60,000 fps habia un tiron cada 8,3 s. Sin vsync y con
 // G-Sync/FreeSync NO: el "vblank" del compositor es nuestro propio present y
 // recolocar la fase sobre el desplazaba el reloj hasta medio refresco.
-inline FramePacerTiming PaceFrame(int32_t fps, bool display_lock, int32_t phase_percent) {
+// fps is a double so the adaptive pacing (VdSwap) can ask for, say, 83.4.
+inline FramePacerTiming PaceFrame(double fps, bool display_lock, int32_t phase_percent) {
   FramePacerTiming t;
-  if (fps <= 0) {
+  if (!(fps > 0.0)) {
     return t;
   }
   static uint64_t next_flip = 0;
   static uint32_t flips_since_sync = 0;
   const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();
-  uint64_t period = freq / uint64_t(fps);
+  uint64_t period = uint64_t(double(freq) / fps);
   const uint64_t now = rex::chrono::Clock::QueryHostTickCount();
 #if defined(_WIN32)
   using DwmTimingFn = HRESULT(WINAPI*)(HWND, DWM_TIMING_INFO*);

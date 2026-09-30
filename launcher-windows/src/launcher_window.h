@@ -101,6 +101,7 @@ class LauncherWindow final : public QMainWindow {
   // Advanced tab.
   ToggleSwitch* pacingAtGuest_ = nullptr;
   ToggleSwitch* lowLatency_ = nullptr;
+  ToggleSwitch* adaptivePacing_ = nullptr;
   QSpinBox* smoothMs_ = nullptr;
   Segmented* displayLock_ = nullptr;
   ToggleSwitch* presentPerFrame_ = nullptr;

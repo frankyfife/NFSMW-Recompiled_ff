@@ -98,9 +98,36 @@ def leer_json(ruta):
     return presentes, pantalla, {"CapFrameX": len(presentes)}, caidas, 0
 
 
+def leer_propio(ruta):
+    """The game's own recording (F10, frame_times_dir): one row per present with
+    the present time and DXGI's latest displayed present and its display time."""
+    presentes, pantalla, modos = [], [], {}
+    previo = None
+    visto = {}
+    with open(ruta, newline="", encoding="utf-8") as fh:
+        for fila in csv.DictReader(fh):
+            t = float(fila["present_ms"])
+            if previo is not None:
+                presentes.append(t - previo)
+            previo = t
+            n, d = int(fila["displayed_present"]), float(fila["display_ms"])
+            if n and d:
+                visto.setdefault(n, d)
+            clave = f"{fila['target_fps']} fps, vsync {fila['vsync']}"
+            modos[clave] = modos.get(clave, 0) + 1
+    ordenados = sorted(visto.items())
+    for (n0, d0), (n1, d1) in zip(ordenados, ordenados[1:]):
+        if n1 == n0 + 1 and d1 > d0:
+            pantalla.append(d1 - d0)
+    return presentes, pantalla, modos, 0, 0
+
+
 def leer(ruta):
     if ruta.lower().endswith(".json"):
         return leer_json(ruta)
+    with open(ruta, encoding="utf-8", errors="replace") as fh:
+        if fh.readline().startswith("present,present_ms"):
+            return leer_propio(ruta)
     presentes, pantalla, modos, caidas, tearing = [], [], {}, 0, 0
     with open(ruta, newline="", encoding="utf-8", errors="replace") as fh:
         for fila in csv.DictReader(fh):

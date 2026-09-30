@@ -519,6 +519,13 @@ QWidget* LauncherWindow::buildAdvanced() {
                        "The game starts the next frame, and reads the controller, only once "
                        "the previous one is out. Helps most at high frame rates in busy "
                        "scenes."));
+  adaptivePacing_ = new ToggleSwitch(QStringLiteral("Adaptive pacing"));
+  latency->addWide(adaptivePacing_);
+  addNote(latency, QStringLiteral(
+                       "When a scene cannot hold the target (measured: 75-117 fps at a "
+                       "120 fps target in the city), pace at what it holds evenly instead of "
+                       "alternating fast and slow frames."));
+  connect(adaptivePacing_, &ToggleSwitch::toggled, this, onChange);
   smoothMs_ = spin(0, 16);
   auto* smoothRow = new QWidget;
   auto* smh = new QHBoxLayout(smoothRow);
@@ -607,6 +614,7 @@ QWidget* LauncherWindow::buildAdvanced() {
 void LauncherWindow::resetAdvanced() {
   pacingAtGuest_->setChecked(true);
   lowLatency_->setChecked(true);
+  adaptivePacing_->setChecked(true);
   smoothMs_->setValue(6);
   displayLock_->setCurrentIndex(1);
   presentPerFrame_->setChecked(true);
@@ -696,6 +704,7 @@ void LauncherWindow::loadSettings() {
 
   pacingAtGuest_->setChecked(s.value("advanced/pacing_at_guest", true).toBool());
   lowLatency_->setChecked(s.value("advanced/low_latency", true).toBool());
+  adaptivePacing_->setChecked(s.value("advanced/adaptive_pacing", true).toBool());
   smoothMs_->setValue(s.value("advanced/smooth_ms", 6).toInt());
   displayLock_->setCurrentIndex(std::clamp(s.value("advanced/display_lock", 1).toInt(), 0, 2));
   presentPerFrame_->setChecked(s.value("advanced/present_per_frame", true).toBool());
@@ -731,6 +740,7 @@ void LauncherWindow::saveSettings() const {
   s.setValue("renderer/async_shaders", asyncShaders_->isChecked());
   s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
   s.setValue("advanced/low_latency", lowLatency_->isChecked());
+  s.setValue("advanced/adaptive_pacing", adaptivePacing_->isChecked());
   s.setValue("advanced/smooth_ms", smoothMs_->value());
   s.setValue("advanced/display_lock", displayLock_->currentIndex());
   s.setValue("advanced/present_per_frame", presentPerFrame_->isChecked());
@@ -829,6 +839,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   // Advanced tab (see buildAdvanced for what each one does).
   a << flag("frame_pacing_at_guest", pacingAtGuest_->isChecked());
   a << flag("frame_pacing_low_latency", lowLatency_->isChecked());
+  a << flag("frame_pacing_adaptive", adaptivePacing_->isChecked());
   a << opt("frame_pacing_smooth_max_ms", QString::number(smoothMs_->value()));
   a << opt("frame_pacing_display_lock", QString::number(displayLock_->currentIndex()));
   a << flag("present_ui_with_guest_frames", presentPerFrame_->isChecked());
@@ -855,6 +866,8 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   // Every 10 s: frames the game really presents, latency, texture cache.
   a << flag("log_guest_fps", logStats_->isChecked());
   a << flag("log_frame_breakdown", logBreakdown_->isChecked());
+  // F10 in the game records frame times into this folder (one CSV each).
+  a << opt("frame_times_dir", QDir::toNativeSeparators(QDir(logDir_).filePath("frametimes")));
   return a;
 }
 

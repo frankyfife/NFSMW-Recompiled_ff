@@ -266,11 +266,28 @@ class NfsmwApp : public rex::ReXApp {
     rex::ui::RegisterBind("bind_nfsmw_menu", "Escape",
                           "Open/close the game settings menu",
                           [this] { AlternarMenu(); });
+    // Frame time recording (the presenter writes one CSV per recording into
+    // frame_times_dir; the launcher points it at logs\frametimes).
+    rex::ui::RegisterBind("bind_record_frametimes", "F10",
+                          "Start/stop recording frame times (CSV in logs\\frametimes)", [] {
+                            if (rex::cvar::GetFlagInfo("frame_times_recording") == nullptr) {
+                              return;
+                            }
+                            const bool on = rex::cvar::GetFlagByName("frame_times_recording") ==
+                                            "true";
+                            rex::cvar::SetFlagByName("frame_times_recording",
+                                                     on ? "false" : "true");
+                          });
   }
 
   void OnShutdown() override {
     PararVigilante();
     rex::ui::UnregisterBind("bind_nfsmw_menu");
+    rex::ui::UnregisterBind("bind_record_frametimes");
+    // Close an open recording cleanly.
+    if (rex::cvar::GetFlagInfo("frame_times_recording") != nullptr) {
+      rex::cvar::SetFlagByName("frame_times_recording", "false");
+    }
     if (menu_ != nullptr) {
       menu_->RequestClose();
       menu_ = nullptr;
