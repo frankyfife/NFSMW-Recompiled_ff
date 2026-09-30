@@ -44,6 +44,9 @@ FICHEROS = [
     "src/graphics/d3d12/texture_cache.cpp",
     "include/rex/graphics/shared_memory.h",
     "src/graphics/shared_memory.cpp",
+    "src/audio/audio_system.cpp",
+    "src/audio/sdl/sdl_audio_driver.cpp",
+    "src/audio/xma_decoder.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 
