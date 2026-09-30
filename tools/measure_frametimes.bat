@@ -25,7 +25,11 @@ if errorlevel 1 (
     exit /b
 )
 
-set "PM=%ProgramFiles%\NVIDIA Corporation\FrameViewSDK\bin\PresentMon_x64.exe"
+rem The standalone PresentMon that ships with CapFrameX first (the FrameView
+rem build exits silently), then the FrameView one.
+set "PM=%~dp0..\..\_tools\CapFrameX\PresentMon\PresentMon-2.6.0-x64.exe"
+if not exist "%PM%" set "PM=%~dp0..\_tools\CapFrameX\PresentMon\PresentMon-2.6.0-x64.exe"
+if not exist "%PM%" set "PM=%ProgramFiles%\NVIDIA Corporation\FrameViewSDK\bin\PresentMon_x64.exe"
 if not exist "%PM%" (
     echo PresentMon not found at:
     echo   %PM%
