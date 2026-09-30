@@ -42,6 +42,8 @@ FICHEROS = [
     "src/graphics/pipeline/texture/cache.cpp",
     "include/rex/graphics/d3d12/texture_cache.h",
     "src/graphics/d3d12/texture_cache.cpp",
+    "include/rex/graphics/shared_memory.h",
+    "src/graphics/shared_memory.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 
