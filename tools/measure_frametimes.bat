@@ -3,8 +3,9 @@ rem ===========================================================================
 rem  Records the frame times of nfsmw.exe with PresentMon (ships with NVIDIA
 rem  FrameView), independent of the game's own log.
 rem
-rem  PresentMon reads Windows' ETW events, which needs administrator rights:
-rem  Windows asks once (UAC) when this starts.
+rem  PresentMon reads Windows' ETW events, which needs administrator rights.
+rem  This script restarts itself elevated (Windows asks once, UAC). PresentMon's
+rem  own --restart_as_admin did nothing in the FrameView build: it just exits.
 rem
 rem  1. Start this script, then the game (or the other way round).
 rem  2. In the game press F10 to start recording, F10 again to stop.
@@ -15,6 +16,15 @@ rem
 rem  The CSV files land in build\logs\frametimes\.
 rem ===========================================================================
 setlocal
+
+rem Elevated? "net session" only works as administrator.
+net session >nul 2>&1
+if errorlevel 1 (
+    echo Asking Windows for administrator rights...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
+
 set "PM=%ProgramFiles%\NVIDIA Corporation\FrameViewSDK\bin\PresentMon_x64.exe"
 if not exist "%PM%" (
     echo PresentMon not found at:
@@ -35,8 +45,14 @@ if exist "%~dp0nfsmw.exe" (
 if not exist "%OUT%" mkdir "%OUT%"
 
 echo Recording into %OUT%
-echo Press F10 in the game to start and stop a recording. Close the game to end.
+echo.
+echo Press F10 in the game to start a recording, F10 again to stop it.
+echo Close the game (or this window) when you are done.
+echo.
 "%PM%" --process_name nfsmw.exe --output_file "%OUT%\frametimes.csv" --hotkey F10 ^
-       --v1_metrics --qpc_time_ms --terminate_on_proc_exit --stop_existing_session ^
-       --restart_as_admin
+       --v1_metrics --qpc_time_ms --stop_existing_session
+echo.
+echo PresentMon ended (exit code %errorlevel%). Files in %OUT%:
+dir /b "%OUT%\*.csv" 2>nul
+pause
 endlocal
