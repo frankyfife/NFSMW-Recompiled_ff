@@ -90,3 +90,20 @@ user_language = 3
 
 # Black Edition content: byte 0x82A2CE06 (also switchable live in the ESC menu).
 black_edition = true
+
+# ----------------------------------------------------------------------------
+#  GPU emulation speed (measured with the sampling profiler, tools/cpuprof)
+# ----------------------------------------------------------------------------
+#
+#  - readback_resolve_max_kb: with readback_resolve = "fast" (set by the
+#    launcher; without it the image comes out washed out) every render-to-
+#    texture result was copied back to guest memory every frame: 3.6 GB/s
+#    while driving, 16.6 % of the GPU command thread. The game reads only the
+#    small ones on the CPU; the big ones are render targets the GPU samples.
+#    0 = copy everything back (old behavior).
+#  - clear_memory_page_state: true made every page uploaded by the CPU
+#    invalid at the end of each frame, so the next frame copied it again
+#    (~1 GB/s). With false a page is uploaded again only when the game writes
+#    to it (write-protection catches that), as in Xenia Canary.
+readback_resolve_max_kb = 64
+clear_memory_page_state = false
