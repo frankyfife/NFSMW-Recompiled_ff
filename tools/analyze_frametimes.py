@@ -63,7 +63,44 @@ def resumen(valores):
     }
 
 
+def leer_json(ruta):
+    """CapFrameX capture (Documents\\CapFrameX\\Captures\\*.json): looks for the
+    arrays wherever this version puts them (usually Runs[].CaptureData)."""
+    import json
+
+    with open(ruta, encoding="utf-8-sig") as fh:
+        datos = json.load(fh)
+    series = []
+
+    def buscar(nodo):
+        if isinstance(nodo, dict):
+            claves = {k.lower(): k for k in nodo}
+            if "msbetweenpresents" in claves and isinstance(nodo[claves["msbetweenpresents"]], list):
+                series.append((nodo, claves))
+            for v in nodo.values():
+                buscar(v)
+        elif isinstance(nodo, list):
+            for v in nodo:
+                buscar(v)
+
+    buscar(datos)
+    presentes, pantalla, caidas = [], [], 0
+    for nodo, claves in series:
+        mp = nodo[claves["msbetweenpresents"]]
+        md = nodo.get(claves.get("msbetweendisplaychange", ""), []) or []
+        dr = nodo.get(claves.get("dropped", ""), []) or []
+        presentes += [float(x) for x in mp[1:]]
+        for i in range(1, len(md)):
+            if i < len(dr) and dr[i]:
+                caidas += 1
+            elif float(md[i]) > 0:
+                pantalla.append(float(md[i]))
+    return presentes, pantalla, {"CapFrameX": len(presentes)}, caidas, 0
+
+
 def leer(ruta):
+    if ruta.lower().endswith(".json"):
+        return leer_json(ruta)
     presentes, pantalla, modos, caidas, tearing = [], [], {}, 0, 0
     with open(ruta, newline="", encoding="utf-8", errors="replace") as fh:
         for fila in csv.DictReader(fh):
@@ -120,7 +157,9 @@ def fila_tabla(nombre, r):
 
 
 def main():
-    rutas = sys.argv[1:] or sorted(glob.glob(os.path.join(CARPETA, "*.csv")))
+    capframex = os.path.join(os.path.expanduser("~"), "Documents", "CapFrameX", "Captures")
+    rutas = sys.argv[1:] or (sorted(glob.glob(os.path.join(CARPETA, "*.csv"))) +
+                             sorted(glob.glob(os.path.join(capframex, "*nfsmw*.json"))))
     if not rutas:
         print("No CSV files. Record with tools\\measure_frametimes.bat first.")
         return 1
@@ -151,7 +190,8 @@ def main():
             f"{fila_tabla('presents', rp)}{fila_tabla('display', rd)}</table>"
             f"<p>{'Display changes' if pantalla else 'Presents'}, frame by frame "
             "(red: hitch):</p>" + svg(base, objetivo))
-    salida = os.path.join(os.path.dirname(rutas[0]), "report.html")
+    os.makedirs(CARPETA, exist_ok=True)
+    salida = os.path.join(CARPETA, "report.html")
     with open(salida, "w", encoding="utf-8") as fh:
         fh.write("<!doctype html><meta charset=utf-8><title>Frame pacing</title><style>"
                  "body{font:14px system-ui;background:#16181d;color:#ddd;margin:24px}"
