@@ -90,6 +90,42 @@ semantics** too, it just skips the command stream.
 - It recorded 86 shaders and 266 pipelines at the time. The set is small and
   fixed, so offline translation is realistic.
 
+**More entry points named** (from the disassembly, `tools/renderprobe/disasm.py`)
+
+| Function | Meaning |
+|---|---|
+| `sub_8259C150` | SetVertexShader: device +12948, refcount, merges the shader's fetch-constant patches into the shadow at +1152 |
+| `sub_8259BDC0` | SetPixelShader: device +12944 |
+| `sub_8259B9B8` / `sub_8259B800` | Release of vertex / pixel shader |
+| `sub_8259C3D0` | SetVertexDeclaration: device +11408, same dirty bits as the vertex shader |
+| `sub_825954C0` | Resource GetType (3..7 = texture, volume, cube, VB, IB) |
+| `sub_82596C18` | KickOff: `INDIRECT_BUFFER` packets (0xC0013F00) into the ring, write pointer via MMIO 0x7FC80714 |
+| `sub_82596868` / `sub_82597268` | reserve command buffer space / start a new segment |
+| `sub_825932D8` | DrawVerticesUP: user vertices copied into the command buffer, through a fetch constant |
+| `sub_8258F810` / `sub_8258F998` | Query Issue / GetData (occlusion, EVENT_WRITE) |
+| `sub_825A25A0` | cache flush of an address range (dcbf), 102 per frame. This tells which memory the CPU has just written. |
+
+**What the GPU thread costs, by category** (profile while driving at 120 fps,
+inclusive):
+
+| Category | Share | With option B |
+|---|---|---|
+| Shared memory (write watch, uploads) | 20 % | gone: resources are known from Create/Lock |
+| Bindings | 10 % | stays, simplified |
+| Primitive processing (index conversion, quads) | 9 % | mostly gone |
+| PM4 parsing | 9 % | gone |
+| Texture cache (untiling, lookup) | 8 % | mostly gone: once at load time |
+| Render target / EDRAM cache | 8 % | gone: real render targets |
+| Driver (self time) | 14 % | stays |
+
+- **Option A** saves only the PM4 share on the GPU thread, plus the ~21 % on
+  the game thread. The game thread is not the bottleneck at 120 fps (the GPU
+  thread is), so A brings few fps on its own.
+- **Option B** removes roughly half of the GPU thread's work per frame:
+  shared memory, textures, render targets, PM4 and most of the primitive
+  processing. That would be about 1.5–2× more throughput. It is the much
+  larger effort.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,
@@ -120,9 +156,21 @@ months.
 **C. Engine level (Darkness style).** Least suitable. It would require
 reverse-engineering the EA engine, and there are no shader sources.
 
-**Recommendation:** A as a step towards B. A builds exactly the
-infrastructure B needs: hooks, reading the device shadow and the
-synchronization model. It also pays off on its own and can be measured.
+**Recommendation:** go for B directly, but in stages, each of which can be
+verified on its own:
+
+1. **Capture**: log the D3D calls and the device state of a frame,
+   including resources from Create/Lock and render targets, and check them
+   against what the CP receives.
+2. **Shaders offline**: translate all shaders of the cache (`.xsh`) to HLSL
+   or DXIL and compare them with the existing translator.
+3. **Parallel renderer**: draw a frame natively in a second window or
+   offscreen, while the emulation keeps showing the real image. That makes
+   image comparisons possible without risk.
+4. **Switch over** path by path: menu first, then the world.
+
+A on its own is not worth it as a performance measure; its parts (hooks,
+reading the device shadow) are part of stage 1 anyway.
 
 ## Next concrete steps
 
