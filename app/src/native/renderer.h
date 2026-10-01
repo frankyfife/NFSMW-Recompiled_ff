@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,6 +58,16 @@ struct ResolveCall {
   uint32_t dest_slice;     // cube face / array slice
 };
 
+// The latest frame in a texture another Direct3D 12 device can open (the
+// emulator's, to show it in the game's window): NT handles, the fence value
+// to wait for on the shared fence, size.
+struct SharedFrame {
+  HANDLE texture = nullptr;
+  HANDLE fence = nullptr;
+  uint64_t fence_value = 0;
+  uint32_t width = 0, height = 0;
+};
+
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
   uint32_t draws = 0, draws_skipped = 0, resolves = 0, textures_loaded = 0,
@@ -86,6 +97,11 @@ class Renderer {
   // Output to a window: the front buffer (a resolve destination) scaled to it.
   bool CreateWindowOutput(HWND window);
   bool Present(uint32_t front_buffer_base);
+  // Output for another device: copies of the front buffer in shared textures.
+  bool CreateSharedOutput(uint32_t width, uint32_t height);
+  bool PresentToShared(uint32_t front_buffer_base);
+  // Thread-safe: the latest complete frame.
+  bool GetSharedFrame(SharedFrame& frame);
   // Copies changed guest memory into the GPU copy before the next draw.
   void UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size);
 
@@ -198,6 +214,21 @@ class Renderer {
   ComPtr<ID3D12RootSignature> present_root_signature_;
   ComPtr<ID3D12PipelineState> present_pipeline_;
   HWND window_ = nullptr;
+
+  static constexpr uint32_t kSharedOutputs = 3;
+  struct SharedOutput {
+    ComPtr<ID3D12Resource> texture;
+    HANDLE handle = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
+  };
+  SharedOutput shared_outputs_[kSharedOutputs];
+  ComPtr<ID3D12Fence> shared_fence_;
+  HANDLE shared_fence_handle_ = nullptr;
+  uint64_t shared_fence_value_ = 0;
+  uint32_t shared_next_ = 0, shared_width_ = 0, shared_height_ = 0;
+  std::mutex shared_mutex_;
+  uint32_t shared_latest_ = 0;
+  uint64_t shared_latest_value_ = 0;
   uint32_t window_width_ = 0, window_height_ = 0;
 
   RendererStats stats_;

@@ -324,9 +324,10 @@ at start in the audio thread. The SDK now falls back to a silent output
 
 ## Stage 4: the native renderer running in the game (2026-10-01)
 
-`--native_renderer=true` (development mode) draws every frame a second time
-with the native renderer and shows it in its own window,
-"NFSMW - native renderer (parallel)", next to the emulated game.
+`--native_renderer=true` (development mode) draws every frame with the
+native renderer and **shows its picture in the game's window** instead of the
+emulation's. `--native_renderer_window=true` also shows it in a second window,
+"NFSMW - native renderer (parallel)". The emulation still draws every frame.
 
 - **Code:** the renderer moved to `app/src/native/renderer.*` (shared with
   `tools/replay`); `app/src/native/parallel.cpp` records the frame and runs
@@ -354,13 +355,24 @@ with the native renderer and shows it in its own window,
   emulation (sky, colors, shadows, HUD) and shows the whole front buffer.
   Main menu and title screen also render.
 
+**In the game's window:** the renderer copies its front buffer into one of
+three textures shared with the emulator's Direct3D 12 device (NT handles,
+simultaneous access, a shared fence). The game exports `NfsmwNativeFrame`;
+the SDK's `IssueSwap` (patch in `tools/parche_ff.py`) asks it for the latest
+frame, waits for the fence on its queue and uses that texture instead of the
+emulated front buffer, with the same gamma ramp and FXAA. Measured in free
+roam: 591 of 597 frames drawn natively in 10 s at 60 fps; the picture in the
+game's window matches. The 89 % crop shows there too, so it comes from the
+presenter, not from the emulated drawing.
+
 **Open:**
-- The car's shadow on the ground looks weaker than in the emulation.
 - The renderer reads memory later than the draw happened: dynamic data the
   game rewrites in between can glitch.
 - Second graphics card: the renderer could run on the other adapter.
-- Next big step: replace the emulation's output by this one (show the
-  native image in the game's window), then drop the PM4 path for the frame.
+- Next big step: stop the emulation from drawing the frames the native
+  renderer draws (skip the PM4 draws, keep what the game waits for: fences,
+  occlusion queries, resolves the CPU reads), which is where the speed gain
+  is.
 
 ## Options
 

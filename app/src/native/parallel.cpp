@@ -5,9 +5,12 @@
 // render_capture.cpp) record every draw and resolve of a frame: the device's
 // register shadow, the microcode that runs and the resolve arguments. At the
 // Swap the frame goes to a thread with its own Direct3D 12 device, which draws
-// it with the native renderer (app/src/native/renderer.cpp) and shows the
-// front buffer in a second window. The emulation keeps drawing the game as
-// before; if the renderer is still busy, a frame is dropped.
+// it with the native renderer (app/src/native/renderer.cpp). Its front buffer
+// goes into a texture shared with the emulator's Direct3D 12 device, which
+// shows it in the game's window instead of its own (NfsmwNativeFrame below,
+// tools/parche_ff.py: IssueSwap); with native_renderer_window also in a second
+// window. The emulation still draws every frame; if the renderer is busy, a
+// frame is dropped (the game's window shows the previous one).
 //
 // The renderer reads vertices, indices and textures straight from guest
 // memory (a D3D12 heap opened on it), while the game goes on: data the game
@@ -40,8 +43,11 @@
 #include "renderer.h"
 
 REXCVAR_DEFINE_BOOL(native_renderer, false, "Debug",
-                    "Draw every frame a second time with the native Direct3D 12 renderer and show "
-                    "it in its own window (development; the game is drawn by the emulation)");
+                    "Draw every frame with the native Direct3D 12 renderer and show its picture in "
+                    "the game's window instead of the emulation's (development; the emulation "
+                    "still draws every frame too)");
+REXCVAR_DEFINE_BOOL(native_renderer_window, false, "Debug",
+                    "With native_renderer: also show the native picture in a second window");
 
 using namespace rex::graphics;
 using replay::GuestToPhysical;
@@ -171,6 +177,9 @@ class Parallel {
   std::thread thread_;
   std::atomic<bool> started_{false};
   std::atomic<uint64_t> frames_recorded_{0}, frames_dropped_{0}, frames_rendered_{0};
+
+ public:
+  std::atomic<replay::Renderer*> renderer_{nullptr};
 };
 
 uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out) {
@@ -339,6 +348,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 }
 
 void Parallel::Thread() {
+  HWND window = nullptr;
+  if (REXCVAR_GET(native_renderer_window)) {
   WNDCLASSW wc = {};
   wc.lpfnWndProc = WindowProc;
   wc.hInstance = GetModuleHandleW(nullptr);
@@ -348,11 +359,12 @@ void Parallel::Thread() {
   RECT rect = {0, 0, 1280, 720};
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
   // Never takes the keyboard focus from the game's window.
-  HWND window = CreateWindowExW(WS_EX_NOACTIVATE, wc.lpszClassName, L"NFSMW - native renderer (parallel)",
+  window = CreateWindowExW(WS_EX_NOACTIVATE, wc.lpszClassName, L"NFSMW - native renderer (parallel)",
                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                                 rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr,
                                 wc.hInstance, nullptr);
   ShowWindow(window, SW_SHOWNOACTIVATE);
+  }
 
   replay::Renderer renderer;
   auto* kernel = rex::system::kernel_state();
@@ -365,9 +377,13 @@ void Parallel::Thread() {
     REXLOG_ERROR("[native renderer] no memory for the guest memory copy");
     return;
   }
-  if (!renderer.CreateWindowOutput(window)) {
+  if (window && !renderer.CreateWindowOutput(window)) {
     REXLOG_ERROR("[native renderer] window output failed");
   }
+  if (!renderer.CreateSharedOutput(1280, 720)) {
+    REXLOG_ERROR("[native renderer] shared output for the game's window failed");
+  }
+  renderer_ = &renderer;
   REXLOG_INFO("[native renderer] running");
 
   auto last_log = std::chrono::steady_clock::now();
@@ -469,7 +485,10 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     d.pixel_shader_dwords = item.ps_dwords;
     renderer.Draw(d);
   }
-  renderer.Present(frame.front_buffer);
+  renderer.PresentToShared(frame.front_buffer);
+  if (REXCVAR_GET(native_renderer_window)) {
+    renderer.Present(frame.front_buffer);
+  }
 }
 
 }  // namespace
@@ -496,4 +515,29 @@ extern "C" REX_FUNC(sub_825A3AF0) {
   const uint32_t before = LoadBE32(base + device);
   __imp__sub_825A3AF0(ctx, base);
   Parallel::Get().ShaderLoadsWritten(base, device, before, LoadBE32(base + device));
+}
+
+// For the emulator's swap (tools/parche_ff.py, D3D12CommandProcessor::
+// IssueSwap): the latest native frame, in a texture its device can open.
+struct NfsmwNativeFrameInfo {
+  void* texture;  // NT handle of a shared ID3D12Resource, R8G8B8A8, simultaneous access
+  void* fence;    // NT handle of a shared ID3D12Fence
+  uint64_t fence_value;
+  uint32_t width, height;
+};
+extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* info) {
+  if (!REXCVAR_GET(native_renderer)) {
+    return false;
+  }
+  replay::Renderer* renderer = Parallel::Get().renderer_.load();
+  replay::SharedFrame frame;
+  if (!renderer || !renderer->GetSharedFrame(frame)) {
+    return false;
+  }
+  info->texture = frame.texture;
+  info->fence = frame.fence;
+  info->fence_value = frame.fence_value;
+  info->width = frame.width;
+  info->height = frame.height;
+  return true;
 }

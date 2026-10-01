@@ -2139,4 +2139,111 @@ bool Renderer::Present(uint32_t front_buffer_base) {
   return SUCCEEDED(swap_chain_->Present(0, 0));
 }
 
+bool Renderer::CreateSharedOutput(uint32_t width, uint32_t height) {
+  if (!present_pipeline_ && !CreatePresentPipeline()) {
+    return false;
+  }
+  if (FAILED(device_->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&shared_fence_))) ||
+      FAILED(device_->CreateSharedHandle(shared_fence_.Get(), nullptr, GENERIC_ALL, nullptr,
+                                         &shared_fence_handle_))) {
+    return false;
+  }
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  desc.Width = width;
+  desc.Height = height;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  // Simultaneous access: the other device reads it from the common state
+  // without transitions.
+  desc.Flags =
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+  D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
+  for (SharedOutput& output : shared_outputs_) {
+    if (FAILED(device_->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_SHARED, &desc,
+                                                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                IID_PPV_ARGS(&output.texture))) ||
+        FAILED(device_->CreateSharedHandle(output.texture.Get(), nullptr, GENERIC_ALL, nullptr,
+                                           &output.handle))) {
+      return false;
+    }
+    output.rtv = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
+    output.rtv.ptr += size_t(rtv_used_++) * rtv_increment_;
+    device_->CreateRenderTargetView(output.texture.Get(), nullptr, output.rtv);
+  }
+  shared_width_ = width;
+  shared_height_ = height;
+  return true;
+}
+
+bool Renderer::PresentToShared(uint32_t front_buffer_base) {
+  auto it = resolved_.find(front_buffer_base);
+  if (!shared_fence_ || it == resolved_.end() || !it->second) {
+    return Flush();
+  }
+  HostTexture& texture = *it->second;
+  const uint32_t index = shared_next_;
+  shared_next_ = (shared_next_ + 1) % kSharedOutputs;
+  SharedOutput& output = shared_outputs_[index];
+  Transition(texture.resource.Get(), texture.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = output.texture.Get();
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+  list_->ResourceBarrier(1, &barrier);
+  D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+  D3D12_GPU_DESCRIPTOR_HANDLE gpu = AllocateViews(1, cpu);
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+  srv.Format = texture.format;
+  srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+  srv.Texture2DArray.MipLevels = 1;
+  srv.Texture2DArray.ArraySize = 1;
+  device_->CreateShaderResourceView(texture.resource.Get(), &srv, cpu);
+  struct {
+    float inverse_size[2];
+    uint32_t flags;
+  } constants = {{1.0f / float(shared_width_), 1.0f / float(shared_height_)}, 1};
+  list_->SetPipelineState(present_pipeline_.Get());
+  list_->SetGraphicsRootSignature(present_root_signature_.Get());
+  list_->SetGraphicsRoot32BitConstants(0, 3, &constants, 0);
+  list_->SetGraphicsRootDescriptorTable(1, gpu);
+  list_->OMSetRenderTargets(1, &output.rtv, FALSE, nullptr);
+  D3D12_VIEWPORT viewport = {0.0f, 0.0f, float(shared_width_), float(shared_height_), 0.0f, 1.0f};
+  D3D12_RECT scissor = {0, 0, LONG(shared_width_), LONG(shared_height_)};
+  list_->RSSetViewports(1, &viewport);
+  list_->RSSetScissorRects(1, &scissor);
+  list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  list_->DrawInstanced(3, 1, 0, 0);
+  std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+  list_->ResourceBarrier(1, &barrier);
+  if (!Flush()) {
+    return false;
+  }
+  // Flush waited for the GPU: the frame is complete. The fence tells the
+  // other device too.
+  queue_->Signal(shared_fence_.Get(), ++shared_fence_value_);
+  std::lock_guard<std::mutex> lock(shared_mutex_);
+  shared_latest_ = index;
+  shared_latest_value_ = shared_fence_value_;
+  return true;
+}
+
+bool Renderer::GetSharedFrame(SharedFrame& frame) {
+  std::lock_guard<std::mutex> lock(shared_mutex_);
+  if (!shared_latest_value_) {
+    return false;
+  }
+  frame.texture = shared_outputs_[shared_latest_].handle;
+  frame.fence = shared_fence_handle_;
+  frame.fence_value = shared_latest_value_;
+  frame.width = shared_width_;
+  frame.height = shared_height_;
+  return true;
+}
+
 }  // namespace replay
