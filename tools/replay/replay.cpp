@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +64,46 @@ bool GetMicrocode(const Capture& capture, uint32_t object, bool pixel, uint32_t&
   return dwords != 0;
 }
 
+// The shaders the GPU ran per draw, if tools/replay/assign_shaders.py made
+// capture_shaders_N.bin (from the GPU side's capture_ucode_N.bin).
+struct GpuShaders {
+  std::map<uint64_t, std::vector<uint8_t>> microcode;          // hash -> big-endian
+  std::map<uint32_t, std::pair<uint64_t, uint64_t>> by_draw;  // sequence -> VS, PS
+  bool Load(const std::string& directory, uint32_t frame) {
+    std::vector<uint8_t> raw;
+    FILE* f = std::fopen((directory + "/capture_ucode_" + std::to_string(frame) + ".bin").c_str(),
+                         "rb");
+    if (!f) {
+      return false;
+    }
+    uint32_t header[4];
+    while (std::fread(header, sizeof(header), 1, f) == 1) {
+      std::vector<uint8_t> code(4 * size_t(header[3]));
+      if (std::fread(code.data(), 1, code.size(), f) != code.size()) {
+        break;
+      }
+      microcode[uint64_t(header[1]) | (uint64_t(header[2]) << 32)] = std::move(code);
+    }
+    std::fclose(f);
+    f = std::fopen((directory + "/capture_shaders_" + std::to_string(frame) + ".bin").c_str(),
+                   "rb");
+    if (!f) {
+      return false;
+    }
+    uint8_t entry[20];
+    while (std::fread(entry, sizeof(entry), 1, f) == 1) {
+      uint32_t sequence;
+      uint64_t vs, ps;
+      std::memcpy(&sequence, entry, 4);
+      std::memcpy(&vs, entry + 4, 8);
+      std::memcpy(&ps, entry + 12, 8);
+      by_draw[sequence] = {vs, ps};
+    }
+    std::fclose(f);
+    return true;
+  }
+};
+
 // Registers not in the device shadow that the draw state needs.
 void SetDefaultRegisters(RegisterFile& regs) {
   regs.values[XE_GPU_REG_PA_SC_WINDOW_OFFSET] = 0;
@@ -84,13 +125,18 @@ int Main(int argc, char** argv) {
   if (!capture.Load(argv[1], frame)) {
     return 1;
   }
+  GpuShaders gpu_shaders;
+  if (gpu_shaders.Load(argv[1], frame)) {
+    std::printf("shaders from the GPU side: %zu programs, %zu draws\n",
+                gpu_shaders.microcode.size(), gpu_shaders.by_draw.size());
+  }
   Renderer renderer;
   if (!renderer.Initialize() || !renderer.UploadMemory(capture.memory())) {
     std::fprintf(stderr, "renderer initialization failed\n");
     return 1;
   }
   auto regs = std::make_unique<RegisterFile>();
-  uint32_t draws = 0, resolves = 0, up_draws = 0, unknown_shaders = 0;
+  uint32_t draws = 0, resolves = 0, up_draws = 0, unknown_shaders = 0, gpu_side_shaders = 0;
   // Some resolves of the frame are only sampled in the next one (and some
   // textures are sampled before this frame's resolve writes them): the first
   // pass produces them, the second pass is the frame as the game sees it.
@@ -98,7 +144,7 @@ int Main(int argc, char** argv) {
   for (int pass = 0; pass < passes; ++pass) {
     if (pass) {
       renderer.ResetStats();
-      draws = resolves = up_draws = unknown_shaders = 0;
+      draws = resolves = up_draws = unknown_shaders = gpu_side_shaders = 0;
     }
     for (const Record& r : capture.records()) {
       if (!r.memory.empty()) {
@@ -143,12 +189,33 @@ int Main(int argc, char** argv) {
         initiator.prim_type = xenos::PrimitiveType(d.primitive_type);
         initiator.num_indices = d.vertex_count;
         regs->values[XE_GPU_REG_VGT_DRAW_INITIATOR] = initiator.value;
-        if (!GetMicrocode(capture, r.objects[0], false, d.vertex_shader_address,
-                          d.vertex_shader_dwords)) {
+        GetMicrocode(capture, r.objects[0], false, d.vertex_shader_address,
+                     d.vertex_shader_dwords);
+        GetMicrocode(capture, r.objects[1], true, d.pixel_shader_address, d.pixel_shader_dwords);
+        d.vertex_shader_code = capture.memory() + d.vertex_shader_address;
+        d.pixel_shader_code = capture.memory() + d.pixel_shader_address;
+        // The shaders the GPU ran (from the GPU side) where known, else the
+        // shader objects' microcode. They only differ where the library
+        // patched a vertex shader into scratch memory.
+        static const bool object_shaders = std::getenv("REPLAY_OBJECT_SHADERS") != nullptr;
+        auto assigned = gpu_shaders.by_draw.find(r.sequence);
+        if (assigned != gpu_shaders.by_draw.end() && !object_shaders) {
+          auto vs = gpu_shaders.microcode.find(assigned->second.first);
+          if (vs != gpu_shaders.microcode.end()) {
+            d.vertex_shader_code = vs->second.data();
+            d.vertex_shader_dwords = uint32_t(vs->second.size() / 4);
+            ++gpu_side_shaders;
+          }
+          auto ps = gpu_shaders.microcode.find(assigned->second.second);
+          if (ps != gpu_shaders.microcode.end() && d.pixel_shader_dwords) {
+            d.pixel_shader_code = ps->second.data();
+            d.pixel_shader_dwords = uint32_t(ps->second.size() / 4);
+          }
+        }
+        if (!d.vertex_shader_dwords) {
           ++unknown_shaders;
           continue;
         }
-        GetMicrocode(capture, r.objects[1], true, d.pixel_shader_address, d.pixel_shader_dwords);
         // REPLAY_SKIP=first-last: leave out these draws (for finding what a
         // draw contributes).
         static int skip_first = -1, skip_last = -1;
@@ -207,9 +274,9 @@ int Main(int argc, char** argv) {
   }
   const RendererStats& s = renderer.stats();
   std::printf(
-      "draws %u (UP %u, no vertex shader %u) -> drawn %u, skipped %u | resolves %u | textures "
+      "draws %u (UP %u, no vertex shader %u, from the GPU side %u) -> drawn %u, skipped %u | resolves %u | textures "
       "loaded %u, from resolves %u, unsupported %u | pipelines %u, failed %u\n",
-      draws, up_draws, unknown_shaders, s.draws, s.draws_skipped, s.resolves, s.textures_loaded,
+      draws, up_draws, unknown_shaders, gpu_side_shaders, s.draws, s.draws_skipped, s.resolves, s.textures_loaded,
       s.textures_from_resolves, s.textures_unsupported, s.pipelines, s.pipeline_failures);
   // The resolves write what the guest would see in memory: with
   // RB_COPY_DEST_INFO swap, blue first. The front buffer (last resolve) is

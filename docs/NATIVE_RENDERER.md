@@ -274,33 +274,50 @@ Direct3D 12 renderer for a captured frame, ~2000 lines.
   3D, packed mips), DXT as BC1-3, host swizzles like the SDK.
 - Two passes over the frame, so resolves that are sampled the next frame
   exist.
+- Shaders: what the GPU ran where the capture has it (see below), else the
+  shader object's microcode.
 - Debugging: `REPLAY_TRACE=a-b` (draw state), `REPLAY_SKIP=a-b`,
   `REPLAY_DISASM=<address>`; `compare_ref.py` compares with a screenshot.
 
-**Result on frame 6500:** all 2896 draws and 25 resolves, 97 pipelines, in
-3.5 s including the 512 MB upload (RTX 5090). Compared with the emulator's
-screenshot (which shows the front buffer cropped to 89 %, overscan): mean
-difference 7.5/255 per channel, 3.5 % of the pixels differ by more than 32
-(clouds and reflections moved in the seconds between capture and
-screenshot). **One real difference: the car's shadow on the ground is
-missing.** The 110 dynamic shadow caster draws (pass 2) draw nothing (with
-pass 1 skipped, both shadow maps stay empty). Their vertices come through
-fetch constant 95 from dynamic memory; with the recorded data the positions
-end up behind the light (w < 0). Most likely the game fills that geometry
-after the draw call (the GPU reads it later), so the capture recorded old
-data; not proven yet. The capture now
-compares draw data at the next KickOff instead of at the call
-(not yet verified: the PC had no display attached afterwards, and the game
-cannot present then).
+**Result on frame 6500:** all ~2900 draws and 25 resolves in 3.5 s including
+the 512 MB upload (RTX 5090). Compared with the emulator's screenshot (which
+shows the front buffer cropped to 89 %, centered): **mean difference
+5.3/255 per channel, 1.8 % of the pixels differ by more than 32** (edges,
+texture filtering, clouds that moved between capture and screenshot). The
+car's ground shadow, the reflections, bloom and the color grading match.
+
+**The car shadow, or: which shader really runs.** The 110 dynamic shadow
+caster draws (pass 2) first drew nothing. Their vertex shader objects
+(+12 = FFFFFFFF) have vertex fetches without format and stride: the D3D
+library patches them for the bound vertex declaration and links them to
+the pixel shader when it writes the shader load (`sub_825A3AF0`, linking in
+`sub_825A37D8`), partly into scratch memory. In the frame, three different
+programs ran from `08BFF000`; the shader object's microcode is the
+unpatched original. Reading the IM_LOAD packets back from the command
+buffer on the game side was not reliable (game code outside the library
+also writes shader loads, e.g. `sub_825739F0`), so the GPU side now writes
+every shader it ran (`capture_ucode_N.bin`) and
+`tools/replay/assign_shaders.py` assigns them to the game draws through the
+draw matching (`capture_shaders_N.bin`). Everywhere else the GPU's microcode
+is byte-identical to the shader object's, which the replay uses for the
+draws the matching does not reach (the post chain after the tiles).
+For the in-game renderer this means hooking the library's patch/link step
+(or replicating the patching from the vertex declaration).
+
+Capturing data at the draw call can miss data the game writes after the
+call (the GPU reads it later), so the capture compares draw data at the next
+KickOff now; it was not the cause here, but it is the safer point.
 
 **Side finding:** without a default audio device (TV off) the game crashed
 at start in the audio thread. The SDK now falls back to a silent output
 (`tools/parche_ff.py`).
 
 **Next:**
-1. New capture with the KickOff data sync, check the car shadow.
-2. Remaining differences pixel by pixel (sampler details, gamma, MSAA sample
+1. Remaining differences pixel by pixel (sampler details, gamma, MSAA sample
    positions), then frames from other places (menu, night, rain, race).
+2. The emulator shows only 89 % of the front buffer (centered), so the HUD
+   looks cut or shifted at the edges; the presenter's safe area option is
+   off, the cause is still open.
 3. Then the step to the game: drive the renderer from the D3D hooks in the
    running game instead of from a file (first in parallel, showing its image
    in a second window), see "Switch over" below.

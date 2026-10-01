@@ -62,6 +62,10 @@ bool Capture::Load(const std::string& directory, uint32_t frame) {
   size_t off = 8;
   while (off + 4 <= raw_.size()) {
     const uint32_t magic = Load32(raw_, off);
+    if (magic == 0x444F4355) {  // 'UCOD' of a test version of the capture: skip
+      off += 20 + 4 * size_t(Load32(raw_, off + 16));
+      continue;
+    }
     if (magic == kMagicObject) {
       const uint32_t kind = Load32(raw_, off + 8), address = Load32(raw_, off + 12),
                      size = Load32(raw_, off + 16);
@@ -111,6 +115,7 @@ bool Capture::Load(const std::string& directory, uint32_t frame) {
       }
       off += 4 + 4 * size_t(m);
       r.is_draw = true;
+
     }
     records_.push_back(std::move(r));
     register_offsets_.push_back(register_offset);

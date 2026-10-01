@@ -42,8 +42,11 @@ struct DrawCall {
   bool indexed;
   uint32_t index_address;      // physical, first index
   bool index_32bit;
-  uint32_t vertex_shader_address, vertex_shader_dwords;  // physical
-  uint32_t pixel_shader_address, pixel_shader_dwords;    // 0 if none
+  // Big-endian microcode; the address only names it in traces.
+  const uint8_t* vertex_shader_code;
+  uint32_t vertex_shader_address, vertex_shader_dwords;
+  const uint8_t* pixel_shader_code;
+  uint32_t pixel_shader_address, pixel_shader_dwords;  // 0 dwords if none
 };
 
 struct ResolveCall {
@@ -93,7 +96,7 @@ class Renderer {
   struct HostTexture;
   struct Pipeline;
 
-  Shader* GetShader(uint32_t address, uint32_t dwords, bool pixel);
+  Shader* GetShader(const uint8_t* code, uint32_t dwords, uint32_t address, bool pixel);
   RenderTarget* GetRenderTarget(uint32_t edram_base, uint32_t pitch, uint32_t msaa,
                                 uint32_t format, bool depth);
   HostTexture* GetTexture(const uint32_t* fetch, bool for_cube);

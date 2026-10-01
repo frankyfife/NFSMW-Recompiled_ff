@@ -157,6 +157,15 @@ TextureFormatInfo TextureFormat(xenos::TextureFormat f) {
   }
 }
 
+uint64_t HashBytes(const void* data, size_t size) {
+  uint64_t h = 1469598103934665603ull;
+  const uint8_t* p = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < size; ++i) {
+    h = (h ^ p[i]) * 1099511628211ull;
+  }
+  return h;
+}
+
 void SwapCopy(uint8_t* dest, const uint8_t* src, uint32_t size, xenos::Endian endian) {
   switch (endian) {
     case xenos::Endian::k8in16:
@@ -603,8 +612,10 @@ void Renderer::UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size
   list_->CopyBufferRegion(shared_memory_.Get(), address, buffer, buffer_offset, size);
 }
 
-Renderer::Shader* Renderer::GetShader(uint32_t address, uint32_t dwords, bool pixel) {
-  const uint64_t key = (uint64_t(address) << 1) | uint64_t(pixel);
+Renderer::Shader* Renderer::GetShader(const uint8_t* code, uint32_t dwords, uint32_t address,
+                                      bool pixel) {
+  // By content: the same address holds different (patched) programs.
+  const uint64_t key = (HashBytes(code, size_t(dwords) * 4) << 1) | uint64_t(pixel);
   auto it = shaders_.find(key);
   if (it != shaders_.end()) {
     return it->second.get();
@@ -612,7 +623,7 @@ Renderer::Shader* Renderer::GetShader(uint32_t address, uint32_t dwords, bool pi
   auto shader = std::make_unique<Shader>();
   shader->shader = std::make_unique<DxbcShader>(
       pixel ? xenos::ShaderType::kPixel : xenos::ShaderType::kVertex, key,
-      reinterpret_cast<const uint32_t*>(guest_memory_ + address), dwords);
+      reinterpret_cast<const uint32_t*>(code), dwords);
   shader->shader->AnalyzeUcode(disasm_);
   // REPLAY_DISASM=<hex address>: print that shader's microcode.
   if (const char* want = std::getenv("REPLAY_DISASM")) {
@@ -946,15 +957,6 @@ struct PipelineKey {
   float depth_bias_slope;
 };
 
-uint64_t HashBytes(const void* data, size_t size) {
-  uint64_t h = 1469598103934665603ull;
-  const uint8_t* p = static_cast<const uint8_t*>(data);
-  for (size_t i = 0; i < size; ++i) {
-    h = (h ^ p[i]) * 1099511628211ull;
-  }
-  return h;
-}
-
 // Guest swizzle (fetch constant) through the host swizzle of the format.
 UINT ComponentMapping(uint32_t swizzle, uint32_t host_swizzle) {
   uint32_t m[4];
@@ -992,7 +994,8 @@ void Renderer::Draw(const DrawCall& d) {
     ++stats_.draws_skipped;
     return;
   }
-  Shader* vs = GetShader(d.vertex_shader_address, d.vertex_shader_dwords, false);
+  Shader* vs =
+      GetShader(d.vertex_shader_code, d.vertex_shader_dwords, d.vertex_shader_address, false);
   const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
   if (!draw_util::IsRasterizationPotentiallyDone(regs, polygonal)) {
     ++stats_.draws_skipped;
@@ -1000,7 +1003,7 @@ void Renderer::Draw(const DrawCall& d) {
   }
   Shader* ps = nullptr;
   if (mode == xenos::EdramMode::kColorDepth && d.pixel_shader_dwords) {
-    ps = GetShader(d.pixel_shader_address, d.pixel_shader_dwords, true);
+    ps = GetShader(d.pixel_shader_code, d.pixel_shader_dwords, d.pixel_shader_address, true);
     if (!draw_util::IsPixelShaderNeededWithRasterization(*ps->shader, regs)) {
       ps = nullptr;
     }
@@ -1543,6 +1546,15 @@ void Renderer::Draw(const DrawCall& d) {
         key.front_counter_clockwise, key.depth_bias, key.depth_bias_slope);
   }
   if (int(d.sequence) >= trace_first && int(d.sequence) <= trace_last) {
+    for (const auto& binding : vs_shader.vertex_bindings()) {
+      for (const auto& attribute : binding.attributes) {
+        const auto& a = attribute.fetch_instr.attributes;
+        std::printf("  binding fetch %u stride %u dwords: format %u offset %d dwords%s%s exp %d\n",
+                    binding.fetch_constant, binding.stride_words, uint32_t(a.data_format),
+                    a.offset, a.is_signed ? " signed" : "", a.is_integer ? " integer" : "",
+                    a.exp_adjust);
+      }
+    }
     const auto& map = vs_shader.constant_register_map();
     for (uint32_t i = 0; i < 96; ++i) {
       if (map.vertex_fetch_bitmap[i >> 5] & (1u << (i & 31))) {
