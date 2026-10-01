@@ -72,7 +72,8 @@ constexpr ShadowGroup kShadowGroups[] = {
 constexpr uint32_t kShadowCount = 16 + 21 + 5 + 12 + 21 + 38 + 8 + 1024 + 1024 + 192 + 40;
 constexpr uint32_t kDeviceVertexShader = 12948, kDevicePixelShader = 12944,
                    kDeviceIndexBuffer = 12532;
-constexpr uint32_t kIndirectLoad = 0xC0012700;  // PM4 IM_LOAD, 2 dwords
+constexpr uint32_t kIndirectLoad = 0xC0012700;   // PM4 IM_LOAD, 2 dwords
+constexpr uint32_t kImmediateLoad = 0xC0002B00;  // PM4 IM_LOAD_IMMEDIATE (count in 16:29)
 
 // Entry indices (tools/renderprobe/d3d_layer.json).
 enum : int {
@@ -334,17 +335,30 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
   if (vs_object != scanned_vs_object_) {
     scanned_vs_ = 0;
   }
-  if (after <= before || after - before > 0x1000) {
+  if (after <= before || after - before > 0x10000) {
     return;
   }
   for (uint32_t p = before + 4; p + 8 <= after; p += 4) {
-    if (LoadBE32(base + p) == kIndirectLoad) {
+    const uint32_t header = LoadBE32(base + p);
+    if (header == kIndirectLoad) {
+      // IM_LOAD: address | type, start | size.
       const uint32_t address_type = LoadBE32(base + p + 4);
       if ((address_type & 3) == 0) {
         scanned_vs_ = address_type & ~3u;
         scanned_vs_object_ = vs_object;
       }
       p += 8;
+    } else if ((header & 0xC000FF00) == kImmediateLoad) {
+      // IM_LOAD_IMMEDIATE: type, start | size, then the microcode inline. The
+      // library copies a vertex shader into the command buffer like this when
+      // it patches it for the vertex declaration and links it to the pixel
+      // shader (sub_825A37D8): that copy is what runs.
+      const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
+      if ((LoadBE32(base + p + 4) & 3) == 0) {
+        scanned_vs_ = GuestToPhysical(p + 12);
+        scanned_vs_object_ = vs_object;
+      }
+      p += 4 * count;
     }
   }
 }
@@ -463,12 +477,14 @@ void Parallel::Thread() {
       const replay::RendererStats& s = renderer.stats();
       REXLOG_INFO(
           "[native renderer] 10 s: {} frames recorded, {} drawn ({:.1f} ms each), {} dropped | "
-          "last frame: {} draws, {} skipped, {} resolves, {} KB uploaded | textures loaded {}, "
+          "last frame: {} draws ({} with unpatched vertex shaders), {} skipped, {} resolves, {} KB "
+          "uploaded | textures loaded {}, "
           "reloaded {}, unsupported {} | pipelines {}, failed {} | ms: sync {:.1f}, textures {:.1f}, "
           "GPU wait {:.1f}",
           frames_recorded_.exchange(0), rendered_since_log,
           rendered_since_log ? render_ms / double(rendered_since_log) : 0.0,
-          frames_dropped_.exchange(0), s.draws, s.draws_skipped, s.resolves,
+          frames_dropped_.exchange(0), s.draws, s.unpatched_vertex_shaders, s.draws_skipped,
+          s.resolves,
           s.bytes_uploaded >> 10, s.textures_loaded,
           s.textures_reloaded, s.textures_unsupported, s.pipelines, s.pipeline_failures, s.sync_ms,
           s.texture_ms, s.flush_ms);

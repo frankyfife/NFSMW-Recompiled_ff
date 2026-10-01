@@ -386,8 +386,16 @@ Profile of the renderer thread: memory comparison of the pages draws read
 (~20 %), the D3D12 driver (~25 %), Draw itself (~10 %). Occlusion queries
 report nothing while the emulation does not draw (sun flare).
 
+**Dynamic shadows (car shadow), fixed:** for vertex shaders it patches and
+links to the pixel shader (`sub_825A37D8`), the library does not load the
+microcode from an address: it copies the patched program into the command
+buffer itself (PM4 `IM_LOAD_IMMEDIATE`, opcode 0x2B). The recorder now reads
+those packets too, after `sub_825A3AF0`, and takes the microcode from the
+command buffer. Before, the shadow casters ran the unpatched original
+(vertex fetches without format and stride) and drew nothing. Measured: 0 of
+2577 draws with an unpatched vertex shader; the car's shadow shows.
+
 **Open:**
-- Dynamic shadows (car shadow): reported missing in the live picture.
 - The renderer reads memory later than the draw happened: dynamic data the
   game rewrites in between can glitch.
 - Second graphics card: the renderer could run on the other adapter.

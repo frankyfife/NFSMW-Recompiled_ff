@@ -1584,6 +1584,12 @@ void Renderer::Draw(const DrawCall& d) {
     use_indices = true;
   }
 
+  for (const auto& binding : vs_shader.vertex_bindings()) {
+    if (!binding.stride_words) {
+      ++stats_.unpatched_vertex_shaders;
+      break;
+    }
+  }
   // In the running game: upload what the draw reads that changed.
   if (live_) {
     const auto start = std::chrono::steady_clock::now();

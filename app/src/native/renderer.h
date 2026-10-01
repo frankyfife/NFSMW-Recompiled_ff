@@ -73,6 +73,7 @@ struct SharedFrame {
 
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
+  uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
   uint32_t draws = 0, draws_skipped = 0, resolves = 0, textures_loaded = 0,
            textures_from_resolves = 0, textures_unsupported = 0, textures_reloaded = 0,
            pipelines = 0, bytes_uploaded = 0,
