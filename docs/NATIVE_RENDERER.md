@@ -600,6 +600,27 @@ and exhaust pipes. Found by walking the guest stack at the draws (all of
 them go through the render list flush `sub_82454B50`, so the decision is
 made earlier, when the car adds its models).
 
+**Renderer thread, hashing (2026-10-01):** profiled with line tables for
+the renderer files (`-gline-tables-only`, the code is the same) and the
+sampler's new per-line table. The three biggest costs were byte-wise FNV
+hashes: the memory samples of every texture of every frame (`SampledHash`,
+14 %), the pipeline key of every draw (7 %) and the view descriptions of
+every texture binding (7 %); the recorder's microcode hash on the game thread
+was the same. Now eight bytes per step with a multiply-xorshift mix and a
+final avalanche, and a texture is sampled at most 256 times (every 512 bytes
+up to 128 KB, sparser above: each sample is a cache miss; a texture streamed
+into the memory changes nearly every byte). A page `SyncGuestRange` read
+without a fault counts as readable for the frame.
+
+| Uncapped, 2160p, render scale 2, free roam | before | after |
+|---|---|---|
+| Renderer thread per frame | 3.4-3.6 ms | **2.6-2.8 ms** |
+| Game frames per second | 255-272 | **282-301** (the game thread sets it now) |
+| `SampledHash` share of the renderer thread | 14 % | 6.6 % |
+| Recorder share of the game thread | 15.1 % | 11.6 % |
+
+The picture is the same (differences only in swaying trees and the overlay).
+
 **Draw distance (investigated, not changeable this way):** the player's
 camera has its clip distances at +188 / +192 (near 0.5, far 10000; set by
 `sub_82160C90` / `sub_82160C98`, a 10° shadow camera has 1650 / 2250), so the

@@ -161,24 +161,54 @@ TextureFormatInfo TextureFormat(xenos::TextureFormat f) {
   }
 }
 
+// Eight bytes per step (a byte per step, FNV, was the renderer thread's
+// biggest cost: the pipeline key of every draw, the views of every texture,
+// the memory samples of every texture; measured 14 + 7 + 7 %).
+inline uint64_t HashMix(uint64_t h, uint64_t w) {
+  h ^= w;
+  h *= 0x9E3779B97F4A7C15ull;
+  return h ^ (h >> 29);
+}
+inline uint64_t HashFinish(uint64_t h) {
+  h ^= h >> 33;
+  h *= 0xFF51AFD7ED558CCDull;
+  return h ^ (h >> 33);
+}
+
 uint64_t HashBytes(const void* data, size_t size) {
-  uint64_t h = 1469598103934665603ull;
   const uint8_t* p = static_cast<const uint8_t*>(data);
-  for (size_t i = 0; i < size; ++i) {
-    h = (h ^ p[i]) * 1099511628211ull;
+  uint64_t h = 1469598103934665603ull ^ size;
+  size_t i = 0;
+  for (; i + 8 <= size; i += 8) {
+    uint64_t w;
+    std::memcpy(&w, p + i, 8);
+    h = HashMix(h, w);
   }
-  return h;
+  if (i < size) {
+    uint64_t w = 0;
+    std::memcpy(&w, p + i, size - i);
+    h = HashMix(h, w);
+  }
+  return HashFinish(h);
 }
 
 // Hash of 16 bytes of every 512 of a guest memory range (cheap enough to check
-// every texture of a frame).
+// every texture of a frame), at most 256 samples: each one is a cache miss,
+// and a large texture (up to 8192 samples) cost the most. Another texture
+// streamed into the memory changes nearly every byte, so 256 still see it.
 uint64_t SampledHash(const uint8_t* memory, uint32_t address, uint32_t size) {
   uint64_t h = 1469598103934665603ull;
   const uint64_t end = std::min<uint64_t>(uint64_t(address) + size, 0x20000000);
-  for (uint64_t at = address; at + 16 <= end; at += 512) {
-    h = (h ^ HashBytes(memory + at, 16)) * 1099511628211ull;
+  uint64_t stride = 512;
+  while (size / stride > 256) {
+    stride *= 2;
   }
-  return h;
+  for (uint64_t at = address; at + 16 <= end; at += stride) {
+    uint64_t w[2];
+    std::memcpy(w, memory + at, 16);
+    h = HashMix(HashMix(h, w[0]), w[1]);
+  }
+  return HashFinish(h);
 }
 
 void SwapCopy(uint8_t* dest, const uint8_t* src, uint32_t size, xenos::Endian endian) {

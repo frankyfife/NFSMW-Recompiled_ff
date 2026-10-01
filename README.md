@@ -46,8 +46,8 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 
 | Free roam, no frame limit | GPU emulation | Native renderer |
 |---|---|---|
-| Game frames per second | 148 | **287–291** |
-| Frames actually drawn | 148 | **every one** (3.5 ms each on the renderer thread) |
+| Game frames per second | 148 | **282–301** |
+| Frames actually drawn | 148 | **every one** (2.6–2.8 ms each on the renderer thread) |
 | At 4× render scale (5120 × 2880) | — | about 210 |
 | Frame times at 60 fps | 16.3–17.1 ms | **16.0–17.7 ms**, every swap shows its own frame |
 

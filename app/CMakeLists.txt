@@ -64,6 +64,10 @@ if(WIN32 AND NFSMW_NATIVE_RENDERER AND
     set_source_files_properties(${NATIVE_SDK_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/native/sdk_cvars_local.h;-Wno-unused-variable"
         SKIP_PRECOMPILE_HEADERS ON)
+    # Line tables for the renderer (profiling with tools/cpuprof: where in
+    # Draw the time goes); the code is the same.
+    set_source_files_properties(src/native/parallel.cpp src/native/renderer.cpp PROPERTIES
+        COMPILE_OPTIONS "-gline-tables-only")
     set_source_files_properties(${REXSDK_SOURCE_DIR}/thirdparty/dxbc/DXBCChecksum.cpp PROPERTIES
         COMPILE_OPTIONS "-w" SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(nfsmw PRIVATE
