@@ -350,7 +350,7 @@ QWidget* LauncherWindow::buildContent() {
   display->addRow(QStringLiteral("Resolution"), resRow);
   scale_ = new Segmented({QStringLiteral("1×"), QStringLiteral("2×"),
                           QStringLiteral("3×"), QStringLiteral("4×")});
-  display->addRow(QStringLiteral("Internal scale"), scale_);
+  display->addRow(QStringLiteral("Render scale (AA)"), scale_);
   scaleNote_ = note();
   display->grid()->addWidget(scaleNote_, display->grid()->rowCount(), 1);
   mode_ = new Segmented({QStringLiteral("Fullscreen"), QStringLiteral("Windowed")});
