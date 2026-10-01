@@ -573,6 +573,18 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       MarcaVivo("applies instantly");
     }
 
+    if (ExisteCvar("car_lod_highest")) {
+      bool autos = CvarB("car_lod_highest");
+      if (ImGui::Checkbox("Cars at full detail at any distance", &autos)) {
+        SetCvarB("car_lod_highest", autos);
+        Persistir();
+      }
+      MarcaVivo("applies instantly");
+      ImGui::TextColored(ImColor(kTextoAtenuado),
+                         "The game switches a car to simpler models once it covers less than "
+                         "120 pixels of 720p; on, every car keeps its full model.");
+    }
+
     if (ExisteCvar("post_processing")) {
       bool post = CvarB("post_processing");
       if (ImGui::Checkbox("Post-processing (visual treatment)", &post)) {

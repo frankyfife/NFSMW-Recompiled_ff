@@ -19,6 +19,7 @@ set(NFSMW_SOURCES
     src/crash_log.cpp
     src/freecam.cpp
     src/post_processing.cpp
+    src/car_lod.cpp
 )
 
 if(WIN32)

@@ -459,11 +459,16 @@ QWidget* LauncherWindow::buildContent() {
   postProcessing_ = new ToggleSwitch(
       QStringLiteral("Post-processing (colour grading, bloom, motion blur)"));
   image->addWide(postProcessing_);
+  carLod_ = new ToggleSwitch(QStringLiteral("Cars at full detail at any distance"));
+  image->addWide(carLod_);
+  connect(carLod_, &ToggleSwitch::toggled, this, onChange);
   image->grid()->addWidget(
       note(QStringLiteral("MSAA: the samples of the targets the game draws with multisampling, "
                           "on top of the render scale. Mipmaps: Sharper uses one level "
                           "finer textures, Off only the full-size ones (sharpest, distant "
-                          "surfaces shimmer). Post-processing off shows the plain "
+                          "surfaces shimmer). Cars at full detail: the game switches a car to "
+                          "simpler models below 120 pixels of 720p. Post-processing off "
+                          "shows the plain "
                           "picture, without the game's green-yellow tint; also live in the ESC "
                           "menu.")),
       image->grid()->rowCount(), 0, 1, 2);
@@ -670,6 +675,7 @@ void LauncherWindow::loadSettings() {
   const qsizetype ms = kMsaaValues.indexOf(s.value("image/msaa", -1).toInt());
   msaa_->setCurrentIndex(ms >= 0 ? int(ms) : 2);
   postProcessing_->setChecked(s.value("image/post_processing", true).toBool());
+  carLod_->setChecked(s.value("image/car_lod_highest", true).toBool());
   mipmaps_->setCurrentIndex(std::clamp(s.value("image/mipmaps", 0).toInt(), 0, 2));
 
 
@@ -704,6 +710,7 @@ void LauncherWindow::saveSettings() const {
   s.setValue("image/sharpness", sharpness_->value());
   s.setValue("image/msaa", kMsaaValues[msaa_->currentIndex()]);
   s.setValue("image/post_processing", postProcessing_->isChecked());
+  s.setValue("image/car_lod_highest", carLod_->isChecked());
   s.setValue("image/mipmaps", mipmaps_->currentIndex());
   s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
   s.setValue("advanced/low_latency", lowLatency_->isChecked());
@@ -809,6 +816,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << opt("native_renderer_anisotropic", QString::number(kAnisoValues[aniso_->currentIndex()]));
   a << opt("native_renderer_msaa", QString::number(kMsaaValues[msaa_->currentIndex()]));
   a << flag("post_processing", postProcessing_->isChecked());
+  a << flag("car_lod_highest", carLod_->isChecked());
   a << opt("native_renderer_mipmaps", QString::number(mipmaps_->currentIndex()));
   a << opt("fov_scale", QString::number(fov_->value() / 100.0, 'f', 2));
   // Advanced tab (see buildAdvanced for what each one does).

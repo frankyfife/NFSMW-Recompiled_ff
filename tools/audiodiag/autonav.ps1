@@ -2,7 +2,7 @@
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
-# F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
+# s = S key held (count = seconds), F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
 # G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -76,11 +76,13 @@ foreach ($step in $Keys.Split(',')) {
     [G4]::keybd_event(0x79, 0, 2, [UIntPtr]::Zero); Start-Sleep -Milliseconds 500
     continue
   }
-  $m = [regex]::Match($step.Trim(), '^([A-Z])\*?(\d*)@?(\d*)$')
+  $m = [regex]::Match($step.Trim(), '^([A-Za-z])\*?(\d*)@?(\d*)$')
   $k = $m.Groups[1].Value; $n = if ($m.Groups[2].Value) { [int]$m.Groups[2].Value } else { 1 }
   $gap = if ($m.Groups[3].Value) { [int]$m.Groups[3].Value } else { 1800 }
   if ($k -eq 'W') { Start-Sleep -Seconds $n; continue }
-  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27; 'Q' = 0x31; 'Z' = 0x33 }
+  # Lower case s: S key held (left stick down: free camera backwards).
+  if ($k -ceq 's') { $k = 'BACK' }
+  $hold = @{ 'BACK' = 0x53; 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27; 'Q' = 0x31; 'Z' = 0x33 }
   if ($hold.ContainsKey($k)) {
     # Held for n seconds: G = gas (right trigger, O key), V = W key (left
     # stick up), T = arrow up.

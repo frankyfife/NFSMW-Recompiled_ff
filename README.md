@@ -55,6 +55,9 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
   1280 × 720 (on top of the game's own 4× MSAA): much smoother edges, sharper textures.
 - **MSAA:** the game's multisampled targets with 1, 2, 4 (the game's) or 8 samples.
 - **Mipmaps:** the game's, one level sharper, or off (full-size textures only), live.
+- **Cars at full detail at any distance:** the game drops a car to simpler models once it
+  covers less than 120 pixels of its 720p picture (about half of the cars on screen in
+  free roam); now every car keeps its full model. On by default, live in the Esc menu.
 - **No half-loaded textures:** the renderer draws a frame or two after the game; a
   texture whose memory changed is only reloaded once the new content is seen again a
   frame later (white or garbage textures flashed for a frame when the game was already

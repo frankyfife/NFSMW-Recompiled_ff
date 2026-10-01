@@ -92,6 +92,7 @@ class LauncherWindow final : public QMainWindow {
   Segmented* msaa_ = nullptr;
   Segmented* mipmaps_ = nullptr;
   ToggleSwitch* postProcessing_ = nullptr;
+  ToggleSwitch* carLod_ = nullptr;
   QSlider* fov_ = nullptr;
   QLabel* fovValue_ = nullptr;
 

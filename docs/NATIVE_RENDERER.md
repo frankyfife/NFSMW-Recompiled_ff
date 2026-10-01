@@ -585,6 +585,21 @@ shader-load writer (`sub_825A3AF0`, thousands of calls per frame) asked
 stays at 280–286 (the renderer thread's 3.2 ms per frame sets it); the menus
 run at about 650 fps.
 
+**Car LOD (`car_lod_highest`, app/src/car_lod.cpp):** the car's render
+step `sub_824E0648` (found through the string "DEBUG_LOD_CUBE": its static
+initializer builds a global model the step references) asks
+`sub_8221E848(view, position, radius)` how many pixels of the 1280x720 view
+the car covers and takes LOD 0 from 120 pixels on, one step more below 25,
+20, 10 and 0 (table at 0x82060A10), clamped to the car's range
+(CarRenderInfo +5688 / +5692, 0..4 for every car seen); below 1 pixel the car
+is not drawn. With the setting the two calls of the step (return addresses
+0x824E06CC and 0x824E06F4) get at least 120 for a car on screen. Measured:
+half of the car renders in free roam were below 120 pixels; a frozen view
+went from 4663 to 4762 draws, a car 80 m away shows its badge, number plate
+and exhaust pipes. Found by walking the guest stack at the draws (all of
+them go through the render list flush `sub_82454B50`, so the decision is
+made earlier, when the car adds its models).
+
 **Draw distance (investigated, not changeable this way):** the player's
 camera has its clip distances at +188 / +192 (near 0.5, far 10000; set by
 `sub_82160C90` / `sub_82160C98`, a 10° shadow camera has 1650 / 2250), so the
