@@ -365,7 +365,29 @@ roam: 591 of 597 frames drawn natively in 10 s at 60 fps; the picture in the
 game's window matches. The 89 % crop shows there too, so it comes from the
 presenter, not from the emulated drawing.
 
+**The emulation no longer draws (2026-10-01):** while the native renderer
+delivers frames (`NfsmwNativeSkipEmulation`, `native_renderer_skip_emulation`,
+default on), the SDK's `ExecutePacketType3Draw` skips the emulated draws and
+resolves; registers, fences and swaps run as before. Resolves of up to 64 KB
+(the CPU reads e.g. the 64x64 brightness for the exposure) are written into
+guest memory by the native renderer, tiled and byte-swapped like the GPU
+would. The renderer thread no longer waits for the GPU (two alternating
+resource sets).
+
+Measured without frame limit (`--frame_pacing_fps=0 --vsync=false`), free
+roam:
+
+| | game fps | frames shown |
+|---|---|---|
+| Emulation | 148 | 148 |
+| Native renderer | 263-271 | 177 (5.6 ms per frame on the renderer thread) |
+
+Profile of the renderer thread: memory comparison of the pages draws read
+(~20 %), the D3D12 driver (~25 %), Draw itself (~10 %). Occlusion queries
+report nothing while the emulation does not draw (sun flare).
+
 **Open:**
+- Dynamic shadows (car shadow): reported missing in the live picture.
 - The renderer reads memory later than the draw happened: dynamic data the
   game rewrites in between can glitch.
 - Second graphics card: the renderer could run on the other adapter.

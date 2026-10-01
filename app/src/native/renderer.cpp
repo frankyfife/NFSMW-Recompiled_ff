@@ -298,6 +298,11 @@ struct Renderer::HostTexture {
   // a sampled hash of it, compared once per frame.
   uint32_t check_address = 0, check_size = 0;
   uint64_t check_hash = 0, checked_frame = 0;
+  // Resolve destinations: their fetch constant (guest layout) and the frame
+  // they were last written in.
+  uint32_t guest_fetch[6] = {};
+  uint64_t resolved_frame = 0;
+  ComPtr<ID3D12Resource> readback;  // for WriteBackSmallResolves
 };
 
 struct Renderer::Pipeline {
@@ -342,7 +347,11 @@ bool Renderer::Initialize() {
   D3D12_COMMAND_QUEUE_DESC queue_desc = {};
   queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
   device_->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue_));
-  device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator_));
+  for (FrameSet& set : sets_) {
+    device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                    IID_PPV_ARGS(&set.allocator));
+  }
+  allocator_ = sets_[0].allocator;
   device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator_.Get(), nullptr,
                              IID_PPV_ARGS(&list_));
   list_open_ = true;
@@ -408,6 +417,11 @@ bool Renderer::Initialize() {
     shared_memory_table_ = view_heap_->GetGPUDescriptorHandleForHeapStart();
     view_heap_used_ = 2;
   }
+  // Each resource set gets half of the shader-visible descriptors.
+  view_heap_begin_ = 2;
+  view_heap_end_ = 2 + (kViewHeapSize - 2) / 2;
+  sampler_heap_begin_ = 0;
+  sampler_heap_end_ = kSamplerHeapSize / 2;
   // Null texture views.
   {
     auto staging = [&]() {
@@ -565,8 +579,40 @@ bool Renderer::BeginList() {
   return true;
 }
 
-bool Renderer::Flush() {
-  const auto flush_start = std::chrono::steady_clock::now();
+void Renderer::ActivateSet(uint32_t index) {
+  set_ = index;
+  FrameSet& set = sets_[index];
+  if (set.fence_value && fence_->GetCompletedValue() < set.fence_value) {
+    fence_->SetEventOnCompletion(set.fence_value, fence_event_);
+    WaitForSingleObject(fence_event_, INFINITE);
+  }
+  for (auto& work : set.after_completion) {
+    work();
+  }
+  set.after_completion.clear();
+  set.release.clear();
+  // Its upload memory is free again (one buffer kept).
+  upload_buffers_ = std::move(set.upload_buffers);
+  if (upload_buffers_.size() > 1) {
+    upload_buffers_.erase(upload_buffers_.begin(), upload_buffers_.end() - 1);
+  }
+  upload_mapping_ = set.upload_mapping;
+  upload_size_ = set.upload_size;
+  upload_offset_ = 0;
+  allocator_ = set.allocator;
+  const uint32_t view_half = (kViewHeapSize - 2) / 2;
+  view_heap_begin_ = 2 + index * view_half;
+  view_heap_end_ = view_heap_begin_ + view_half;
+  view_heap_used_ = view_heap_begin_;
+  sampler_heap_begin_ = index * (kSamplerHeapSize / 2);
+  sampler_heap_end_ = sampler_heap_begin_ + kSamplerHeapSize / 2;
+  sampler_heap_used_ = sampler_heap_begin_;
+  sampler_ranges_.clear();
+}
+
+bool Renderer::Submit() { return Submit(false); }
+
+bool Renderer::Submit(bool wait_for_all) {
   if (list_open_) {
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
@@ -574,30 +620,34 @@ bool Renderer::Flush() {
     list_open_ = false;
   }
   queue_->Signal(fence_.Get(), ++fence_value_);
-  if (fence_->GetCompletedValue() < fence_value_) {
+  FrameSet& done = sets_[set_];
+  done.fence_value = fence_value_;
+  done.upload_buffers = std::move(upload_buffers_);
+  done.upload_mapping = upload_mapping_;
+  done.upload_size = upload_size_;
+  for (auto& resource : release_after_flush_) {
+    done.release.push_back(std::move(resource));
+  }
+  release_after_flush_.clear();
+  upload_buffers_.clear();
+  const auto wait_start = std::chrono::steady_clock::now();
+  if (wait_for_all && fence_->GetCompletedValue() < fence_value_) {
     fence_->SetEventOnCompletion(fence_value_, fence_event_);
     WaitForSingleObject(fence_event_, INFINITE);
   }
-  release_after_flush_.clear();
+  ActivateSet(set_ ^ 1);
   stats_.flush_ms += std::chrono::duration<double, std::milli>(
-                         std::chrono::steady_clock::now() - flush_start).count();
+                         std::chrono::steady_clock::now() - wait_start).count();
   HRESULT removed = device_->GetDeviceRemovedReason();
   if (FAILED(removed)) {
     std::fprintf(stderr, "device removed: %08X\n", unsigned(removed));
     return false;
   }
-  // Everything recorded so far is done: reuse the upload memory and the
-  // shader-visible descriptors.
-  if (upload_buffers_.size() > 1) {
-    upload_buffers_.erase(upload_buffers_.begin(), upload_buffers_.end() - 1);
-  }
-  upload_offset_ = 0;
-  view_heap_used_ = 2;
-  sampler_heap_used_ = 0;
-  sampler_ranges_.clear();
   BeginList();
   return true;
 }
+
+bool Renderer::Flush() { return Submit(true); }
 
 bool Renderer::UploadMemory(const uint8_t* memory) {
   guest_memory_ = memory;
@@ -633,9 +683,12 @@ void Renderer::UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size
 }
 
 Renderer::Shader* Renderer::GetShader(const uint8_t* code, uint32_t dwords, uint32_t address,
-                                      bool pixel) {
+                                      bool pixel, uint64_t hash) {
   // By content: the same address holds different (patched) programs.
-  const uint64_t key = (HashBytes(code, size_t(dwords) * 4) << 1) | uint64_t(pixel);
+  if (!hash) {
+    hash = HashBytes(code, size_t(dwords) * 4);
+  }
+  const uint64_t key = (hash << 1) | uint64_t(pixel);
   auto it = shaders_.find(key);
   if (it != shaders_.end()) {
     return it->second.get();
@@ -932,9 +985,8 @@ Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
   texture->check_size = std::max<uint32_t>(layout.base.level_data_extent_bytes, 4096);
   texture->check_hash = SampledHash(guest_memory_, texture->check_address, texture->check_size);
   texture->checked_frame = frame_;
-  std::vector<uint32_t> key(words, words + 6);
   HostTexture* result = texture.get();
-  guest_textures_.emplace(std::move(key), std::move(texture));
+  guest_textures_[HashBytes(words, 6 * sizeof(uint32_t))] = std::move(texture);
   return result;
 }
 
@@ -950,10 +1002,12 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
     return resolved->second.get();
   }
   // Cache by the fields that define the data (not the sampler fields).
-  std::vector<uint32_t> key(words, words + 6);
-  key[0] &= ~(uint32_t(0x1FF) << 10);  // clamp modes
-  key[3] = 0;                          // swizzle, filters
-  key[4] = 0;                          // mip filters, LOD bias
+  uint32_t masked[6];
+  std::memcpy(masked, words, sizeof(masked));
+  masked[0] &= ~(uint32_t(0x1FF) << 10);  // clamp modes
+  masked[3] = 0;                          // swizzle, filters
+  masked[4] = 0;                          // mip filters, LOD bias
+  const uint64_t key = HashBytes(masked, sizeof(masked));
   auto it = guest_textures_.find(key);
   if (it != guest_textures_.end()) {
     HostTexture* texture = it->second.get();
@@ -970,8 +1024,6 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
     guest_textures_.erase(it);
     ++stats_.textures_reloaded;
   }
-  uint32_t masked[6];
-  std::memcpy(masked, key.data(), sizeof(masked));
   const auto start = std::chrono::steady_clock::now();
   HostTexture* texture = LoadGuestTexture(masked);
   stats_.texture_ms +=
@@ -1019,7 +1071,7 @@ void Renderer::Draw(const DrawCall& d) {
   const RegisterFile& regs = *d.regs;
   // Start a new list when the shader-visible heaps run low (state is set per
   // draw anyway).
-  if (view_heap_used_ + 512 > kViewHeapSize || sampler_heap_used_ + 64 > kSamplerHeapSize) {
+  if (view_heap_used_ + 512 > view_heap_end_ || sampler_heap_used_ + 64 > sampler_heap_end_) {
     Flush();
   }
   const xenos::EdramMode mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
@@ -1040,7 +1092,8 @@ void Renderer::Draw(const DrawCall& d) {
     return;
   }
   Shader* vs =
-      GetShader(d.vertex_shader_code, d.vertex_shader_dwords, d.vertex_shader_address, false);
+      GetShader(d.vertex_shader_code, d.vertex_shader_dwords, d.vertex_shader_address, false,
+                d.vertex_shader_hash);
   const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
   if (!draw_util::IsRasterizationPotentiallyDone(regs, polygonal)) {
     ++stats_.draws_skipped;
@@ -1048,7 +1101,8 @@ void Renderer::Draw(const DrawCall& d) {
   }
   Shader* ps = nullptr;
   if (mode == xenos::EdramMode::kColorDepth && d.pixel_shader_dwords) {
-    ps = GetShader(d.pixel_shader_code, d.pixel_shader_dwords, d.pixel_shader_address, true);
+    ps = GetShader(d.pixel_shader_code, d.pixel_shader_dwords, d.pixel_shader_address, true,
+                   d.pixel_shader_hash);
     if (!draw_util::IsPixelShaderNeededWithRasterization(*ps->shader, regs)) {
       ps = nullptr;
     }
@@ -1387,8 +1441,9 @@ void Renderer::Draw(const DrawCall& d) {
   };
   auto bind_samplers = [&](const DxbcShader& shader) -> D3D12_GPU_DESCRIPTOR_HANDLE {
     const auto& bindings = shader.GetSamplerBindingsAfterTranslation();
-    std::vector<D3D12_SAMPLER_DESC> descs;
-    std::vector<uint64_t> key_words;
+    D3D12_SAMPLER_DESC descs[32];
+    uint32_t desc_count = 0;
+    uint64_t key = 1469598103934665603ull;
     for (const auto& binding : bindings) {
       xenos::xe_gpu_texture_fetch_t fetch;
       std::memcpy(&fetch, fetch_words(binding.fetch_constant), sizeof(fetch));
@@ -1426,10 +1481,12 @@ void Renderer::Draw(const DrawCall& d) {
       if (fetch.border_color == xenos::BorderColor::k_ABGR_White) {
         s.BorderColor[0] = s.BorderColor[1] = s.BorderColor[2] = s.BorderColor[3] = 1.0f;
       }
-      descs.push_back(s);
-      key_words.push_back(HashBytes(&s, sizeof(s)));
+      if (desc_count < 32) {
+        descs[desc_count++] = s;
+      }
+      key = (key ^ HashBytes(&s, sizeof(s))) * 1099511628211ull;
     }
-    auto it = sampler_ranges_.find(key_words);
+    auto it = sampler_ranges_.find(key);
     if (it != sampler_ranges_.end()) {
       return it->second;
     }
@@ -1437,12 +1494,13 @@ void Renderer::Draw(const DrawCall& d) {
     cpu.ptr += size_t(sampler_heap_used_) * sampler_increment_;
     D3D12_GPU_DESCRIPTOR_HANDLE gpu = sampler_heap_->GetGPUDescriptorHandleForHeapStart();
     gpu.ptr += uint64_t(sampler_heap_used_) * sampler_increment_;
-    for (const D3D12_SAMPLER_DESC& s : descs) {
+    for (uint32_t i = 0; i < desc_count; ++i) {
+      const D3D12_SAMPLER_DESC& s = descs[i];
       device_->CreateSampler(&s, cpu);
       cpu.ptr += sampler_increment_;
     }
-    sampler_heap_used_ += uint32_t(descs.size());
-    sampler_ranges_.emplace(key_words, gpu);
+    sampler_heap_used_ += desc_count;
+    sampler_ranges_.emplace(key, gpu);
     return gpu;
   };
   D3D12_GPU_DESCRIPTOR_HANDLE tables[4];
@@ -1459,24 +1517,28 @@ void Renderer::Draw(const DrawCall& d) {
     std::memcpy(p, data, size);
     return gpu;
   };
+  // Packed as the translator expects (only the constants the shader reads),
+  // straight into the upload buffer.
   auto float_constants = [&](const DxbcShader* shader, uint32_t first_register) {
-    std::vector<uint32_t> packed;
-    if (shader) {
-      const auto& map = shader->constant_register_map();
-      for (uint32_t i = 0; i < 4; ++i) {
-        uint64_t bits = map.float_bitmap[i];
-        while (bits) {
-          const uint32_t index = uint32_t(__builtin_ctzll(bits));
-          bits &= bits - 1;
-          const uint32_t* v = &regs.values[first_register + (i << 8) + (index << 2)];
-          packed.insert(packed.end(), v, v + 4);
-        }
+    const uint32_t count = shader ? shader->constant_register_map().float_count : 0;
+    D3D12_GPU_VIRTUAL_ADDRESS gpu;
+    uint32_t* out =
+        reinterpret_cast<uint32_t*>(AllocateUpload(std::max<uint32_t>(count, 1) * 16, 256, gpu));
+    if (!count) {
+      std::memset(out, 0, 16);
+      return gpu;
+    }
+    const auto& map = shader->constant_register_map();
+    for (uint32_t i = 0; i < 4; ++i) {
+      uint64_t bits = map.float_bitmap[i];
+      while (bits) {
+        const uint32_t index = uint32_t(__builtin_ctzll(bits));
+        bits &= bits - 1;
+        std::memcpy(out, &regs.values[first_register + (i << 8) + (index << 2)], 16);
+        out += 4;
       }
     }
-    if (packed.empty()) {
-      packed.resize(4);
-    }
-    return upload_constants(packed.data(), uint32_t(packed.size() * 4));
+    return gpu;
   };
   const D3D12_GPU_VIRTUAL_ADDRESS cb_system = upload_constants(&system, sizeof(system));
   const D3D12_GPU_VIRTUAL_ADDRESS cb_float_vs =
@@ -1640,7 +1702,7 @@ void Renderer::Draw(const DrawCall& d) {
 
 void Renderer::Resolve(const ResolveCall& r) {
   const rex::graphics::RegisterFile& regs = *r.regs;
-  if (view_heap_used_ + 16 > kViewHeapSize) {
+  if (view_heap_used_ + 16 > view_heap_end_) {
     Flush();
   }
   const uint32_t control = regs[XE_GPU_REG_RB_COPY_CONTROL];
@@ -1717,6 +1779,8 @@ void Renderer::Resolve(const ResolveCall& r) {
       list_->ClearRenderTargetView(rtv, zero, 0, nullptr);
     }
   }
+  std::memcpy(dest->guest_fetch, r.dest_fetch, sizeof(dest->guest_fetch));
+  dest->resolved_frame = frame_;
   if (std::find(resolve_order_.begin(), resolve_order_.end(), base) == resolve_order_.end()) {
     resolve_order_.push_back(base);
   }
@@ -1883,6 +1947,7 @@ bool Renderer::UseLiveGuestMemory(const uint8_t* physical_memory) {
     return false;
   }
   page_synced_frame_.assign(kSharedMemorySize / kLivePage, 0);
+  page_readable_frame_.assign(kSharedMemorySize / kLivePage, 0);
   live_ = true;
   return true;
 }
@@ -1925,7 +1990,21 @@ bool Renderer::Readable(uint32_t address, uint32_t size) const {
   if (!size || uint64_t(address) + size > kSharedMemorySize) {
     return false;
   }
-  return !live_ || ProbePages(guest_memory_ + address, size);
+  if (!live_) {
+    return true;
+  }
+  // Pages already found readable in this frame are not probed again.
+  for (uint32_t page = address / kLivePage, last = (address + size - 1) / kLivePage;
+       page <= last; ++page) {
+    if (page_readable_frame_[page] == frame_) {
+      continue;
+    }
+    if (!ProbePages(guest_memory_ + size_t(page) * kLivePage, kLivePage)) {
+      return false;
+    }
+    page_readable_frame_[page] = frame_;
+  }
+  return true;
 }
 
 void Renderer::SyncGuestRange(uint32_t address, uint32_t size) {
@@ -2221,11 +2300,11 @@ bool Renderer::PresentToShared(uint32_t front_buffer_base) {
   list_->DrawInstanced(3, 1, 0, 0);
   std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
   list_->ResourceBarrier(1, &barrier);
-  if (!Flush()) {
+  // Not waiting: the next frame is recorded while the GPU draws this one; the
+  // shared fence tells the other device when it is done.
+  if (!Submit()) {
     return false;
   }
-  // Flush waited for the GPU: the frame is complete. The fence tells the
-  // other device too.
   queue_->Signal(shared_fence_.Get(), ++shared_fence_value_);
   std::lock_guard<std::mutex> lock(shared_mutex_);
   shared_latest_ = index;
@@ -2244,6 +2323,124 @@ bool Renderer::GetSharedFrame(SharedFrame& frame) {
   frame.width = shared_width_;
   frame.height = shared_height_;
   return true;
+}
+
+uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_bytes) {
+  // Which resolve destinations of this frame are small enough (the CPU reads
+  // results like the average brightness for the exposure).
+  struct Pending {
+    HostTexture* texture;
+    ComPtr<ID3D12Resource> readback;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+    uint32_t fetch[6];
+    uint32_t width, height;
+  };
+  std::vector<Pending> pending;
+  for (auto& [base, texture] : resolved_) {
+    if (!texture || texture->resolved_frame != frame_ ||
+        texture->format != DXGI_FORMAT_R8G8B8A8_UNORM || texture->array_size != 1 ||
+        texture->width * texture->height * 4 > max_bytes) {
+      continue;
+    }
+    D3D12_RESOURCE_DESC desc = texture->resource->GetDesc();
+    Pending p = {texture.get()};
+    UINT rows;
+    UINT64 row_size, total;
+    device_->GetCopyableFootprints(&desc, 0, 1, 0, &p.footprint, &rows, &row_size, &total);
+    // One readback buffer per destination, kept (creating them every frame
+    // cost more than the rest of the frame).
+    if (texture->readback) {
+      p.readback = texture->readback;
+    }
+    D3D12_HEAP_PROPERTIES readback_heap = {D3D12_HEAP_TYPE_READBACK};
+    D3D12_RESOURCE_DESC buffer_desc = {};
+    buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer_desc.Width = total;
+    buffer_desc.Height = 1;
+    buffer_desc.DepthOrArraySize = 1;
+    buffer_desc.MipLevels = 1;
+    buffer_desc.SampleDesc.Count = 1;
+    buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (!p.readback &&
+        FAILED(device_->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &buffer_desc,
+                                                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                IID_PPV_ARGS(&p.readback)))) {
+      continue;
+    }
+    texture->readback = p.readback;
+    Transition(texture->resource.Get(), texture->state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = texture->resource.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = p.readback.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = p.footprint;
+    list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    std::memcpy(p.fetch, texture->guest_fetch, sizeof(p.fetch));
+    p.width = texture->width;
+    p.height = texture->height;
+    p.texture = nullptr;
+    pending.push_back(std::move(p));
+  }
+  const uint32_t count = uint32_t(pending.size());
+  if (!count) {
+    return 0;
+  }
+  // Into guest memory once the GPU is done, the way the GPU writes a
+  // resolve: in the destination texture's layout (tiled, 32 texels per row
+  // of tiles) and byte order.
+  AfterCompletion([this, guest_memory, pending = std::move(pending)]() mutable {
+  for (Pending& p : pending) {
+    struct {
+      uint32_t width, height;
+    } t = {p.width, p.height};
+    xenos::xe_gpu_texture_fetch_t fetch;
+    std::memcpy(&fetch, p.fetch, sizeof(fetch));
+    const uint32_t base = GuestToPhysical(p.fetch[1] & 0xFFFFF000);
+    const uint32_t pitch_texels = std::max<uint32_t>(fetch.pitch, 1) * 32;
+    if (!Readable(base, pitch_texels * ((t.height + 31) & ~31u) * 4)) {
+      continue;
+    }
+    const uint8_t* data;
+    D3D12_RANGE range = {0, size_t(p.footprint.Footprint.RowPitch) * t.height};
+    if (FAILED(p.readback->Map(0, &range, reinterpret_cast<void**>(const_cast<uint8_t**>(&data))))) {
+      continue;
+    }
+    for (uint32_t y = 0; y < t.height; ++y) {
+      const uint8_t* row = data + size_t(y) * p.footprint.Footprint.RowPitch;
+      for (uint32_t x = 0; x < t.width; ++x) {
+        const uint32_t offset =
+            fetch.tiled ? uint32_t(texture_util::GetTiledOffset2D(int32_t(x), int32_t(y),
+                                                                 pitch_texels, 2))
+                        : (y * pitch_texels + x) * 4;
+        if (uint64_t(base) + offset + 4 > kSharedMemorySize) {
+          continue;
+        }
+        // Host R8G8B8A8 back into the guest's byte order.
+        uint8_t texel[4];
+        std::memcpy(texel, row + 4 * x, 4);
+        uint8_t* out = guest_memory + base + offset;
+        switch (fetch.endianness) {
+          case xenos::Endian::k8in32:
+            out[0] = texel[3], out[1] = texel[2], out[2] = texel[1], out[3] = texel[0];
+            break;
+          case xenos::Endian::k16in32:
+            out[0] = texel[2], out[1] = texel[3], out[2] = texel[0], out[3] = texel[1];
+            break;
+          case xenos::Endian::k8in16:
+            out[0] = texel[1], out[1] = texel[0], out[2] = texel[3], out[3] = texel[2];
+            break;
+          default:
+            std::memcpy(out, texel, 4);
+        }
+      }
+    }
+    D3D12_RANGE none = {0, 0};
+    p.readback->Unmap(0, &none);
+  }
+  });
+  return count;
 }
 
 }  // namespace replay

@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -48,6 +49,8 @@ struct DrawCall {
   uint32_t vertex_shader_address, vertex_shader_dwords;
   const uint8_t* pixel_shader_code;
   uint32_t pixel_shader_address, pixel_shader_dwords;  // 0 dwords if none
+  // Hashes of the microcode if the caller knows them (0 = computed here).
+  uint64_t vertex_shader_hash, pixel_shader_hash;
 };
 
 struct ResolveCall {
@@ -102,6 +105,10 @@ class Renderer {
   bool PresentToShared(uint32_t front_buffer_base);
   // Thread-safe: the latest complete frame.
   bool GetSharedFrame(SharedFrame& frame);
+  // Resolves of this frame up to max_bytes go into guest memory the way the
+  // GPU would write them (when the emulation no longer draws, the CPU still
+  // reads some, like the brightness for the exposure). Returns how many.
+  uint32_t WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_bytes);
   // Copies changed guest memory into the GPU copy before the next draw.
   void UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size);
 
@@ -110,6 +117,11 @@ class Renderer {
 
   // Executes everything recorded so far and waits for the GPU.
   bool Flush();
+  // Executes without waiting: the next commands go to the other of two
+  // resource sets (command allocator, upload memory, descriptor ranges); the
+  // CPU only waits when that set's previous frame is not done yet.
+  bool Submit();
+  bool Submit(bool wait_for_all);
   // Writes a resolve destination (by guest base address) as PNG; the last
   // resolve of the frame (the front buffer) after Flush.
   bool SaveResolved(uint32_t base_address, const std::string& path, bool swap_red_blue);
@@ -134,7 +146,8 @@ class Renderer {
   struct HostTexture;
   struct Pipeline;
 
-  Shader* GetShader(const uint8_t* code, uint32_t dwords, uint32_t address, bool pixel);
+  Shader* GetShader(const uint8_t* code, uint32_t dwords, uint32_t address, bool pixel,
+                    uint64_t hash = 0);
   RenderTarget* GetRenderTarget(uint32_t edram_base, uint32_t pitch, uint32_t msaa,
                                 uint32_t format, bool depth);
   HostTexture* GetTexture(const uint32_t* fetch, bool for_cube);
@@ -148,6 +161,11 @@ class Renderer {
                           ID3D12Resource** buffer = nullptr, uint64_t* offset = nullptr);
   D3D12_GPU_DESCRIPTOR_HANDLE AllocateViews(uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu);
   bool CreateResolvePipelines();
+  void ActivateSet(uint32_t index);
+  // Runs once the GPU finished the commands recorded so far.
+  void AfterCompletion(std::function<void()> work) {
+    sets_[set_].after_completion.push_back(std::move(work));
+  }
   bool CreatePresentPipeline();
   bool BeginList();
 
@@ -155,6 +173,19 @@ class Renderer {
   ComPtr<ID3D12Device> device_;
   ComPtr<ID3D12CommandQueue> queue_;
   ComPtr<ID3D12CommandAllocator> allocator_;
+  struct FrameSet {
+    ComPtr<ID3D12CommandAllocator> allocator;
+    std::vector<ComPtr<ID3D12Resource>> upload_buffers;
+    uint8_t* upload_mapping = nullptr;
+    uint64_t upload_size = 0;
+    uint64_t fence_value = 0;
+    std::vector<ComPtr<ID3D12Resource>> release;
+    std::vector<std::function<void()>> after_completion;
+  };
+  FrameSet sets_[2];
+  uint32_t set_ = 0;
+  uint32_t view_heap_begin_ = 2, view_heap_end_ = 0, sampler_heap_begin_ = 0,
+           sampler_heap_end_ = 0;
   ComPtr<ID3D12GraphicsCommandList> list_;
   ComPtr<ID3D12Fence> fence_;
   uint64_t fence_value_ = 0;
@@ -181,7 +212,7 @@ class Renderer {
   D3D12_CPU_DESCRIPTOR_HANDLE null_srv_2d_array_{}, null_srv_3d_{}, null_srv_cube_{};
   D3D12_GPU_DESCRIPTOR_HANDLE shared_memory_table_{};
   // Sampler descriptor ranges by their parameters.
-  std::map<std::vector<uint64_t>, D3D12_GPU_DESCRIPTOR_HANDLE> sampler_ranges_;
+  std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> sampler_ranges_;
 
   rex::graphics::DxbcShaderTranslator translator_;
   rex::string::StringBuffer disasm_;
@@ -189,7 +220,8 @@ class Renderer {
   std::map<uint32_t, ComPtr<ID3D12RootSignature>> root_signatures_;
   std::unordered_map<uint64_t, std::unique_ptr<Pipeline>> pipelines_;
   std::map<uint64_t, std::unique_ptr<RenderTarget>> render_targets_;
-  std::map<std::vector<uint32_t>, std::unique_ptr<HostTexture>> guest_textures_;
+  // By a hash of the fetch constant words that define the data.
+  std::unordered_map<uint64_t, std::unique_ptr<HostTexture>> guest_textures_;
   std::map<uint32_t, std::unique_ptr<HostTexture>> resolved_;
   std::vector<uint32_t> resolve_order_;
 
@@ -204,6 +236,7 @@ class Renderer {
   bool live_ = false;
   std::unique_ptr<uint8_t[]> live_copy_;
   std::vector<uint64_t> page_synced_frame_;
+  mutable std::vector<uint64_t> page_readable_frame_;
   uint64_t frame_ = 0;
   // Resources replaced while the GPU may still use them; freed at Flush.
   std::vector<ComPtr<ID3D12Resource>> release_after_flush_;

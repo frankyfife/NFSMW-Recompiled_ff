@@ -26,6 +26,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <windows.h>
@@ -46,6 +47,9 @@ REXCVAR_DEFINE_BOOL(native_renderer, false, "Debug",
                     "Draw every frame with the native Direct3D 12 renderer and show its picture in "
                     "the game's window instead of the emulation's (development; the emulation "
                     "still draws every frame too)");
+REXCVAR_DEFINE_BOOL(native_renderer_skip_emulation, true, "Debug",
+                    "With native_renderer: the emulation skips its draws and resolves once the "
+                    "native renderer delivers frames (false = both draw, for comparing)");
 REXCVAR_DEFINE_BOOL(native_renderer_window, false, "Debug",
                     "With native_renderer: also show the native picture in a second window");
 
@@ -104,12 +108,25 @@ struct Frame {
   std::vector<Item> items;
   // Microcode already in `code`: (physical address, hash) -> offset.
   std::map<std::pair<uint32_t, uint64_t>, uint32_t> code_offsets;
+  // Microcode of shader objects by address: offset, dwords.
+  std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> code_by_address;
+  // Hash of the microcode at each offset in `code`.
+  std::unordered_map<uint32_t, uint64_t> code_hashes;
   uint32_t front_buffer = 0;
   void Clear() {
+    // Keep the allocations from frame to frame (about 3000 draws).
+    if (registers.capacity() < 3200 * size_t(kShadowCount)) {
+      registers.reserve(3200 * size_t(kShadowCount));
+    }
+    if (items.capacity() < 3200) {
+      items.reserve(3200);
+    }
     registers.clear();
     code.clear();
     items.clear();
     code_offsets.clear();
+    code_by_address.clear();
+    code_hashes.clear();
     front_buffer = 0;
   }
 };
@@ -162,7 +179,8 @@ class Parallel {
   void EnsureThread();
   void Thread();
   void Render(replay::Renderer& renderer, const Frame& frame);
-  uint32_t AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out);
+  uint32_t AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out,
+                   bool may_change);
 
   std::mutex mutex_;  // guards recording_ (game threads)
   std::unique_ptr<Frame> recording_ = std::make_unique<Frame>();
@@ -173,7 +191,8 @@ class Parallel {
   std::mutex handoff_mutex_;
   std::condition_variable handoff_cv_;
   std::unique_ptr<Frame> pending_;        // complete frame for the thread
-  std::unique_ptr<Frame> spare_;          // reused allocation
+  // Frames to record into again (they keep their allocations, ~30 MB each).
+  std::vector<std::unique_ptr<Frame>> free_frames_;
   std::thread thread_;
   std::atomic<bool> started_{false};
   std::atomic<uint64_t> frames_recorded_{0}, frames_dropped_{0}, frames_rendered_{0};
@@ -182,7 +201,17 @@ class Parallel {
   std::atomic<replay::Renderer*> renderer_{nullptr};
 };
 
-uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out) {
+uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out,
+                           bool may_change) {
+  // Shader objects' microcode does not change within a frame: by address.
+  // Scratch memory the library patches shaders into does: by content.
+  if (!may_change) {
+    auto known = recording_->code_by_address.find(address);
+    if (known != recording_->code_by_address.end()) {
+      dwords_out = known->second.second;
+      return known->second.first;
+    }
+  }
   dwords_out = MicrocodeLength(physical, address);
   if (!dwords_out) {
     return 0;
@@ -197,6 +226,10 @@ uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& 
   const uint32_t offset = uint32_t(recording_->code.size());
   recording_->code.insert(recording_->code.end(), code, code + size_t(dwords_out) * 4);
   recording_->code_offsets.emplace(key, offset);
+  recording_->code_hashes.emplace(offset, hash);
+  if (!may_change) {
+    recording_->code_by_address.emplace(address, std::make_pair(offset, dwords_out));
+  }
   return offset;
 }
 
@@ -214,12 +247,15 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
   std::lock_guard<std::mutex> lock(mutex_);
   Frame& f = *recording_;
   Item item;
+  // The shadow as it is in guest memory (big-endian); the renderer thread
+  // swaps it.
   item.registers = uint32_t(f.registers.size());
   const uint8_t* device = base + args[0];
+  f.registers.resize(f.registers.size() + kShadowCount);
+  uint32_t* shadow_out = f.registers.data() + item.registers;
   for (const ShadowGroup& g : kShadowGroups) {
-    for (uint32_t i = 0; i < g.count; ++i) {
-      f.registers.push_back(LoadBE32(device + g.device_offset + 4 * i));
-    }
+    std::memcpy(shadow_out, device + g.device_offset, g.count * 4);
+    shadow_out += g.count;
   }
   if (draw) {
     item.primitive_type = args[1];
@@ -248,17 +284,21 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
     const uint32_t vs_object = LoadBE32(device + kDeviceVertexShader);
     const uint32_t ps_object = LoadBE32(device + kDevicePixelShader);
     uint32_t vs_address = scanned_vs_object_ == vs_object ? scanned_vs_ : 0;
-    if (!vs_address && vs_object) {
-      vs_address = GuestToPhysical(LoadBE32(base + vs_object + 40));
+    uint32_t vs_object_address = 0;
+    if (vs_object) {
+      vs_object_address = GuestToPhysical(LoadBE32(base + vs_object + 40));
+    }
+    if (!vs_address) {
+      vs_address = vs_object_address;
     }
     if (!vs_address) {
       f.registers.resize(item.registers);
       return;
     }
-    item.vs_code = AddCode(physical, vs_address, item.vs_dwords);
+    item.vs_code = AddCode(physical, vs_address, item.vs_dwords, vs_address != vs_object_address);
     if (ps_object) {
       item.ps_code = AddCode(physical, GuestToPhysical(LoadBE32(base + ps_object + 12)),
-                             item.ps_dwords);
+                             item.ps_dwords, false);
     }
   } else {
     // Resolve (dev, flags, rect*, texture*, point*, level, slice, ...).
@@ -317,7 +357,12 @@ void Parallel::SwapDone() {
     done = std::move(recording_);
     {
       std::lock_guard<std::mutex> handoff(handoff_mutex_);
-      recording_ = spare_ ? std::move(spare_) : std::make_unique<Frame>();
+      if (free_frames_.empty()) {
+        recording_ = std::make_unique<Frame>();
+      } else {
+        recording_ = std::move(free_frames_.back());
+        free_frames_.pop_back();
+      }
     }
     recording_->Clear();
   }
@@ -325,7 +370,7 @@ void Parallel::SwapDone() {
   std::lock_guard<std::mutex> handoff(handoff_mutex_);
   if (pending_) {
     ++frames_dropped_;  // the thread has not taken the previous one yet
-    spare_ = std::move(pending_);
+    free_frames_.push_back(std::move(pending_));
   }
   pending_ = std::move(done);
   handoff_cv_.notify_one();
@@ -348,6 +393,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 }
 
 void Parallel::Thread() {
+  SetThreadDescription(GetCurrentThread(), L"Native Renderer");
   HWND window = nullptr;
   if (REXCVAR_GET(native_renderer_window)) {
   WNDCLASSW wc = {};
@@ -410,9 +456,7 @@ void Parallel::Thread() {
       ++rendered_since_log;
       ++frames_rendered_;
       std::lock_guard<std::mutex> lock(handoff_mutex_);
-      if (!spare_) {
-        spare_ = std::move(frame);
-      }
+      free_frames_.push_back(std::move(frame));
     }
     const auto now = std::chrono::steady_clock::now();
     if (now - last_log > std::chrono::seconds(10)) {
@@ -438,14 +482,34 @@ void Parallel::Thread() {
 void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
   renderer.BeginFrame();
   renderer.ResetFrameStats();
-  auto regs = std::make_unique<RegisterFile>();
+  // Registers outside the shadow stay zero (only the defaults below are set);
+  // the shadow groups are overwritten for every item.
+  static std::unique_ptr<RegisterFile> regs = [] {
+    auto file = std::make_unique<RegisterFile>();
+    std::memset(file->values, 0, sizeof(file->values));
+    return file;
+  }();
+  const Item* previous = nullptr;
   for (const Item& item : frame.items) {
-    std::memset(regs->values, 0, sizeof(regs->values));
+    // Groups the previous item had the same are already in the file.
     const uint32_t* shadow = frame.registers.data() + item.registers;
+    const uint32_t* previous_shadow = previous ? frame.registers.data() + previous->registers : nullptr;
     for (const ShadowGroup& g : kShadowGroups) {
-      std::memcpy(&regs->values[g.first_register], shadow, g.count * 4);
+      if (!previous_shadow ||
+          std::memcmp(shadow, previous_shadow, g.count * sizeof(uint32_t))) {
+        uint32_t* out = &regs->values[g.first_register];
+        for (uint32_t i = 0; i < g.count; ++i) {
+          out[i] = _byteswap_ulong(shadow[i]);
+        }
+      }
       shadow += g.count;
+      if (previous_shadow) {
+        previous_shadow += g.count;
+      }
     }
+    // A UP draw overwrites fetch constant 95 below: copy everything again
+    // after it.
+    previous = item.up ? nullptr : &item;
     regs->values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL] = 0x80000000;
     regs->values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR] = 0x3FFF3FFF;
     if (item.resolve) {
@@ -479,6 +543,10 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     initiator.prim_type = xenos::PrimitiveType(item.primitive_type);
     initiator.num_indices = item.count;
     regs->values[XE_GPU_REG_VGT_DRAW_INITIATOR] = initiator.value;
+    auto vs_hash = frame.code_hashes.find(item.vs_code);
+    auto ps_hash = frame.code_hashes.find(item.ps_code);
+    d.vertex_shader_hash = vs_hash != frame.code_hashes.end() ? vs_hash->second : 0;
+    d.pixel_shader_hash = ps_hash != frame.code_hashes.end() ? ps_hash->second : 0;
     d.vertex_shader_code = frame.code.data() + item.vs_code;
     d.vertex_shader_dwords = item.vs_dwords;
     d.pixel_shader_code = frame.code.data() + item.ps_code;
@@ -486,6 +554,10 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     renderer.Draw(d);
   }
   renderer.PresentToShared(frame.front_buffer);
+  if (REXCVAR_GET(native_renderer_skip_emulation)) {
+    auto* kernel = rex::system::kernel_state();
+    renderer.WriteBackSmallResolves(kernel->memory()->physical_membase(), 64 * 1024);
+  }
   if (REXCVAR_GET(native_renderer_window)) {
     renderer.Present(frame.front_buffer);
   }
@@ -540,4 +612,16 @@ extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* inf
   info->width = frame.width;
   info->height = frame.height;
   return true;
+}
+
+// For the emulator's command processor (tools/parche_ff.py,
+// ExecutePacketType3Draw): skip the emulated draws and resolves while the
+// native renderer delivers the frames.
+extern "C" __declspec(dllexport) bool NfsmwNativeSkipEmulation() {
+  if (!REXCVAR_GET(native_renderer) || !REXCVAR_GET(native_renderer_skip_emulation)) {
+    return false;
+  }
+  replay::Renderer* renderer = Parallel::Get().renderer_.load();
+  replay::SharedFrame frame;
+  return renderer && renderer->GetSharedFrame(frame);
 }
