@@ -183,6 +183,16 @@ src/audio/xma_decoder.cpp
     big-endian) y en <fichero>.ts el QPC de cada uno, antes de audio_mute:
     para medir sonidos sin escucharlos.
 
+include/rex/audio/sdl/sdl_audio_driver.h
+src/audio/sdl/sdl_audio_driver.cpp
+    Sin dispositivo de audio (la salida por defecto es una tele HDMI
+    apagada): antes el juego moria al arrancar con un acceso invalido del
+    guest en el hilo de audio ("No default audio device available"). Ahora
+    un hilo consume los frames al ritmo del dispositivo (256 muestras a
+    48 kHz) y los tira: el juego sigue, mudo. MEDIDO: arranca con "no audio
+    device: running without sound output" en el log y el hilo de audio del
+    juego recibe sus callbacks (1697 en 10 s).
+
 Este fichero lo genera tools/generar_parche_ff.py: la linea base es el SDK
 de git con los demas parche_*.py aplicados en el orden de CONSTRUIR.bat.
 """
@@ -584,23 +594,51 @@ BLOQUES = [
     ('src/audio/sdl/sdl_audio_driver.cpp',
      'sdl/sdl_audio_driver.cpp #1',
      '#include <array>\n#include <cstring>\n\n',
-     '#include <array>\n#include <atomic>\n#include <cstdio>\n#include <cstring>\n#include <string>\n\n'),
+     '#include <array>\n#include <atomic>\n#include <cstdio>\n#include <chrono>\n#include <cstring>\n#include <string>\n\n'),
     ('src/audio/sdl/sdl_audio_driver.cpp',
      'sdl/sdl_audio_driver.cpp #2',
      'REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");\n\n',
      'REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");\n// PARCHE LOCAL - diagnostics: every frame the guest submits, raw (256\n// samples x 6 channels, big-endian float, channel after channel), before\n// audio_mute. For measuring cut or short sound effects without listening.\nREXCVAR_DEFINE_STRING(audio_dump_file, "", "Audio",\n                      "Append every submitted audio frame (raw 6 x 256 big-endian floats) to "\n                      "this file; empty = off");\n\nnamespace rex::audio {\n// PARCHE LOCAL - audio_system.cpp, [audio] diagnostics.\nextern std::atomic<uint64_t> g_audio_underrun_chunks;\nextern std::atomic<uint64_t> g_audio_played_chunks;\n}  // namespace rex::audio\n\n'),
     ('src/audio/sdl/sdl_audio_driver.cpp',
      'sdl/sdl_audio_driver.cpp #3',
-     '\n  static uint32_t sdl_submit_count = 0;\n',
-     '\n  {\n    // Next to it, <file>.ts: the host QueryPerformanceCounter of each frame.\n    static FILE* dump = nullptr;\n    static FILE* dump_ts = nullptr;\n    static bool dump_tried = false;\n    if (!dump_tried) {\n      dump_tried = true;\n      const std::string path = REXCVAR_GET(audio_dump_file);\n      if (!path.empty()) {\n        dump = std::fopen(path.c_str(), "wb");\n        dump_ts = std::fopen((path + ".ts").c_str(), "wb");\n      }\n    }\n    if (dump) {\n      std::fwrite(input_frame, sizeof(float), frame_samples_, dump);\n      std::fflush(dump);\n    }\n    if (dump_ts) {\n      const uint64_t now = SDL_GetPerformanceCounter();\n      std::fwrite(&now, sizeof(now), 1, dump_ts);\n      std::fflush(dump_ts);\n    }\n  }\n\n  static uint32_t sdl_submit_count = 0;\n'),
+     '    REXAPU_ERROR("SDL_InitSubSystem(SDL_INIT_AUDIO) failed: {}", SDL_GetError());\n    return false;\n  }\n',
+     '    REXAPU_ERROR("SDL_InitSubSystem(SDL_INIT_AUDIO) failed: {}", SDL_GetError());\n    return StartNullOutput();\n  }\n'),
     ('src/audio/sdl/sdl_audio_driver.cpp',
      'sdl/sdl_audio_driver.cpp #4',
+     '    REXAPU_ERROR("SDL_OpenAudioDeviceStream() failed: {}", SDL_GetError());\n    return false;\n  }\n',
+     '    REXAPU_ERROR("SDL_OpenAudioDeviceStream() failed: {}", SDL_GetError());\n    return StartNullOutput();\n  }\n'),
+    ('src/audio/sdl/sdl_audio_driver.cpp',
+     'sdl/sdl_audio_driver.cpp #5',
+     '\nvoid SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {\n',
+     '\n// PARCHE LOCAL - no audio device (for example the default output is an HDMI\n// TV that is switched off): before this, the game crashed on start with a\n// guest access violation in the audio thread. Now a thread takes the frames\n// at the rate of the device (256 samples at 48 kHz) and drops them, so the\n// game runs muted.\nbool SDLAudioDriver::StartNullOutput() {\n  if (sdl_stream_) {\n    SDL_DestroyAudioStream(sdl_stream_);\n    sdl_stream_ = nullptr;\n  }\n  REXAPU_WARN("no audio device: running without sound output");\n  null_running_ = true;\n  null_thread_ = std::thread([this]() {\n    using clock = std::chrono::steady_clock;\n    const auto period = std::chrono::nanoseconds(1000000000ll * channel_samples_ / frame_frequency_);\n    auto next = clock::now();\n    while (null_running_.load(std::memory_order_relaxed)) {\n      next += period;\n      std::this_thread::sleep_until(next);\n      std::unique_lock<std::mutex> guard(frames_mutex_);\n      if (frames_queued_.empty()) {\n        g_audio_underrun_chunks.fetch_add(1, std::memory_order_relaxed);\n        continue;\n      }\n      g_audio_played_chunks.fetch_add(1, std::memory_order_relaxed);\n      frames_unused_.push(frames_queued_.front());\n      frames_queued_.pop();\n      semaphore_->Release(1, nullptr);\n    }\n  });\n  return true;\n}\n\nvoid SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {\n'),
+    ('src/audio/sdl/sdl_audio_driver.cpp',
+     'sdl/sdl_audio_driver.cpp #6',
+     '  std::memcpy(output_frame, input_frame, frame_samples_ * sizeof(float));\n\n',
+     '  std::memcpy(output_frame, input_frame, frame_samples_ * sizeof(float));\n\n  {\n    // Next to it, <file>.ts: the host QueryPerformanceCounter of each frame.\n    static FILE* dump = nullptr;\n    static FILE* dump_ts = nullptr;\n    static bool dump_tried = false;\n    if (!dump_tried) {\n      dump_tried = true;\n      const std::string path = REXCVAR_GET(audio_dump_file);\n      if (!path.empty()) {\n        dump = std::fopen(path.c_str(), "wb");\n        dump_ts = std::fopen((path + ".ts").c_str(), "wb");\n      }\n    }\n    if (dump) {\n      std::fwrite(input_frame, sizeof(float), frame_samples_, dump);\n      std::fflush(dump);\n    }\n    if (dump_ts) {\n      const uint64_t now = SDL_GetPerformanceCounter();\n      std::fwrite(&now, sizeof(now), 1, dump_ts);\n      std::fflush(dump_ts);\n    }\n  }\n\n'),
+    ('src/audio/sdl/sdl_audio_driver.cpp',
+     'sdl/sdl_audio_driver.cpp #7',
+     'void SDLAudioDriver::Shutdown() {\n  if (sdl_stream_) {\n',
+     'void SDLAudioDriver::Shutdown() {\n  if (null_thread_.joinable()) {\n    null_running_ = false;\n    null_thread_.join();\n  }\n  if (sdl_stream_) {\n'),
+    ('src/audio/sdl/sdl_audio_driver.cpp',
+     'sdl/sdl_audio_driver.cpp #8',
      '      }\n      std::memset(data, 0, len);\n',
      '      }\n      g_audio_underrun_chunks.fetch_add(1, std::memory_order_relaxed);\n      std::memset(data, 0, len);\n'),
     ('src/audio/sdl/sdl_audio_driver.cpp',
-     'sdl/sdl_audio_driver.cpp #5',
+     'sdl/sdl_audio_driver.cpp #9',
      '    } else {\n      auto buffer = driver->frames_queued_.front();\n',
      '    } else {\n      g_audio_played_chunks.fetch_add(1, std::memory_order_relaxed);\n      auto buffer = driver->frames_queued_.front();\n'),
+    ('include/rex/audio/sdl/sdl_audio_driver.h',
+     'sdl/sdl_audio_driver.h #1',
+     '\n#include <mutex>\n#include <queue>\n#include <stack>\n\n',
+     '\n#include <atomic>\n#include <mutex>\n#include <queue>\n#include <stack>\n#include <thread>\n\n'),
+    ('include/rex/audio/sdl/sdl_audio_driver.h',
+     'sdl/sdl_audio_driver.h #2',
+     '                          int total_amount);\n\n',
+     '                          int total_amount);\n  // PARCHE LOCAL - without an audio device: consume the frames silently.\n  bool StartNullOutput();\n\n'),
+    ('include/rex/audio/sdl/sdl_audio_driver.h',
+     'sdl/sdl_audio_driver.h #3',
+     '  std::mutex frames_mutex_ = {};\n};\n',
+     '  std::mutex frames_mutex_ = {};\n  std::thread null_thread_;\n  std::atomic<bool> null_running_{false};\n};\n'),
     ('src/audio/xma_decoder.cpp',
      'audio/xma_decoder.cpp #1',
      '\n#include <rex/audio/xma/context.h>\n',

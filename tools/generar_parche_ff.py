@@ -46,6 +46,7 @@ FICHEROS = [
     "src/graphics/shared_memory.cpp",
     "src/audio/audio_system.cpp",
     "src/audio/sdl/sdl_audio_driver.cpp",
+    "include/rex/audio/sdl/sdl_audio_driver.h",
     "src/audio/xma_decoder.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]

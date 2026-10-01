@@ -222,6 +222,89 @@ inclusive):
   - Clear (`sub_8259A500`?).
   - The 14 index-buffer exceptions.
 
+## Stage 3 result: the frame drawn natively (2026-10-01)
+
+**The frame graph** (`tools/renderprobe/resolves.py`, frame 6500 standing in
+free roam). Resolves reach the GPU as RECTLIST draws with RB_MODECONTROL = copy;
+the device shadow holds RB_COPY_* after the game's Resolve call, so the game
+side alone describes them:
+
+| Pass | Surface | Resolved to |
+|---|---|---|
+| World shadow map | 1600×1600 depth, 611 draws | `07737000` (depth → 24_8 texture) |
+| Dynamic shadow casters | same depth, 110 depth-only draws | `080FB000`, then depth cleared |
+| Road reflection | 640×360, mirrored scene | `07647000`, sampled the **next** frame |
+| Environment cube map | 6 × 256² with 4× MSAA | faces of the cube at `073D7000` (slice = r9) |
+| Main scene | 1280×720 4× MSAA, 3 tiles | depth `08C90000`, color `09758000`, per tile rect |
+| Post (bloom, luminance) | 320×180, 64×64, 160×90 ping-pong | `08B8A000` … `08ABF000` |
+| Composite | 1280×720 | `09758000`, then front buffer `093C0000` |
+
+- **Clear** is part of the resolve: RB_COPY_CONTROL bits 8/9 clear the
+  resolved region to RB_COLOR_CLEAR / RB_DEPTH_CLEAR. The EDRAM is cleared
+  for the next frame by the front buffer resolve.
+- **Resolve arguments:** `Resolve(dev, flags, rect*, texture*, point*, level,
+  slice, clear color*)`; the destination's fetch constant is at texture +16
+  (virtual base, 0xE range = physical + 4 KB). The tiles resolve with rects
+  (0,0,1280,256), (0,256,1280,512), (0,512,1280,720) into the same texture.
+- **Index buffers:** the 14 exceptions of stage 2 were the 4 KB offset of the
+  0xE range; with it, all 2724 indexed draws match (16-bit indices).
+- **Draw calls:** `DrawVertices(dev, prim, start, count)`; `DrawVerticesUP
+  (dev, prim, count, data, stride)` calls `BeginVertices(dev, prim, count,
+  stride)` (`sub_825932D8`), which returns the command buffer space the data
+  goes to and points vertex fetch constant 95 (`0x48BE/BF`) at it.
+  Primitives: triangle lists (indexed), fans and quad lists (not indexed).
+
+**Capture for replay (format 2, `app/src/render_capture.cpp`):** the whole
+guest physical memory at the start of the frame (`capture_snap_N.bin`,
+512 MB) plus the vertex, index and UP data each draw uses that changed since,
+and for resolves the register shadow and what the pointer arguments point to.
+
+**The replay (`tools/replay`, `nfsmw_replay <build> <frame>`):** an own
+Direct3D 12 renderer for a captured frame, ~2000 lines.
+- Shaders: the SDK's DXBC translator, compiled into the tool from the SDK
+  source; all 61 programs of the frame translate. Constants, root signature
+  and system constants laid out like the SDK's D3D12 command processor.
+- Guest memory: one 512 MB buffer the shaders fetch vertices from.
+- Render targets: a host texture per EDRAM surface (base, pitch, MSAA,
+  format), real 4× MSAA, **every draw once, no tiles**.
+- Resolves: a copy (with MSAA resolve and the red/blue swap of
+  RB_COPY_DEST_INFO) into a host texture keyed by the destination address;
+  later draws sampling that address get it. Depth becomes R32_FLOAT.
+- Textures: untiled on the CPU with the SDK's layout functions (2D, cube,
+  3D, packed mips), DXT as BC1-3, host swizzles like the SDK.
+- Two passes over the frame, so resolves that are sampled the next frame
+  exist.
+- Debugging: `REPLAY_TRACE=a-b` (draw state), `REPLAY_SKIP=a-b`,
+  `REPLAY_DISASM=<address>`; `compare_ref.py` compares with a screenshot.
+
+**Result on frame 6500:** all 2896 draws and 25 resolves, 97 pipelines, in
+3.5 s including the 512 MB upload (RTX 5090). Compared with the emulator's
+screenshot (which shows the front buffer cropped to 89 %, overscan): mean
+difference 7.5/255 per channel, 3.5 % of the pixels differ by more than 32
+(clouds and reflections moved in the seconds between capture and
+screenshot). **One real difference: the car's shadow on the ground is
+missing.** The 110 dynamic shadow caster draws (pass 2) draw nothing (with
+pass 1 skipped, both shadow maps stay empty). Their vertices come through
+fetch constant 95 from dynamic memory; with the recorded data the positions
+end up behind the light (w < 0). Most likely the game fills that geometry
+after the draw call (the GPU reads it later), so the capture recorded old
+data; not proven yet. The capture now
+compares draw data at the next KickOff instead of at the call
+(not yet verified: the PC had no display attached afterwards, and the game
+cannot present then).
+
+**Side finding:** without a default audio device (TV off) the game crashed
+at start in the audio thread. The SDK now falls back to a silent output
+(`tools/parche_ff.py`).
+
+**Next:**
+1. New capture with the KickOff data sync, check the car shadow.
+2. Remaining differences pixel by pixel (sampler details, gamma, MSAA sample
+   positions), then frames from other places (menu, night, rain, race).
+3. Then the step to the game: drive the renderer from the D3D hooks in the
+   running game instead of from a file (first in parallel, showing its image
+   in a second window), see "Switch over" below.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,

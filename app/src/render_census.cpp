@@ -149,7 +149,8 @@ void Report() {
 // render_capture.cpp: records one frame of D3D calls (and the device's
 // register shadow at every draw) for comparison with the GPU thread.
 bool RenderCaptureActive();
-void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint8_t* base);
+void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint32_t result,
+                       uint8_t* base);
 void RenderCaptureSwapDone();
 
 extern "C" REX_FUNC(__imp__sub_8258ED20);
@@ -158,9 +159,10 @@ extern "C" REX_FUNC(sub_8258ED20) {
     Count(0, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258ED20(ctx, base);
-    RenderCaptureCall(0, "sub_8258ED20", args, base);
+    RenderCaptureCall(0, "sub_8258ED20", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258ED20(ctx, base);
   }
@@ -171,9 +173,10 @@ extern "C" REX_FUNC(sub_8258F0E8) {
     Count(1, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F0E8(ctx, base);
-    RenderCaptureCall(1, "sub_8258F0E8", args, base);
+    RenderCaptureCall(1, "sub_8258F0E8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F0E8(ctx, base);
   }
@@ -184,9 +187,10 @@ extern "C" REX_FUNC(sub_8258F118) {
     Count(2, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F118(ctx, base);
-    RenderCaptureCall(2, "sub_8258F118", args, base);
+    RenderCaptureCall(2, "sub_8258F118", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F118(ctx, base);
   }
@@ -197,9 +201,10 @@ extern "C" REX_FUNC(sub_8258F470) {
     Count(3, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F470(ctx, base);
-    RenderCaptureCall(3, "sub_8258F470", args, base);
+    RenderCaptureCall(3, "sub_8258F470", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F470(ctx, base);
   }
@@ -210,9 +215,10 @@ extern "C" REX_FUNC(sub_8258F570) {
     Count(4, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F570(ctx, base);
-    RenderCaptureCall(4, "sub_8258F570", args, base);
+    RenderCaptureCall(4, "sub_8258F570", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F570(ctx, base);
   }
@@ -223,9 +229,10 @@ extern "C" REX_FUNC(sub_8258F670) {
     Count(5, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F670(ctx, base);
-    RenderCaptureCall(5, "sub_8258F670", args, base);
+    RenderCaptureCall(5, "sub_8258F670", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F670(ctx, base);
   }
@@ -236,9 +243,10 @@ extern "C" REX_FUNC(sub_8258F810) {
     Count(6, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F810(ctx, base);
-    RenderCaptureCall(6, "sub_8258F810", args, base);
+    RenderCaptureCall(6, "sub_8258F810", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F810(ctx, base);
   }
@@ -249,9 +257,10 @@ extern "C" REX_FUNC(sub_8258F998) {
     Count(7, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258F998(ctx, base);
-    RenderCaptureCall(7, "sub_8258F998", args, base);
+    RenderCaptureCall(7, "sub_8258F998", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258F998(ctx, base);
   }
@@ -262,9 +271,10 @@ extern "C" REX_FUNC(sub_8258FC18) {
     Count(8, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8258FC18(ctx, base);
-    RenderCaptureCall(8, "sub_8258FC18", args, base);
+    RenderCaptureCall(8, "sub_8258FC18", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8258FC18(ctx, base);
   }
@@ -275,9 +285,10 @@ extern "C" REX_FUNC(sub_82591E28) {
     Count(9, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82591E28(ctx, base);
-    RenderCaptureCall(9, "sub_82591E28", args, base);
+    RenderCaptureCall(9, "sub_82591E28", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82591E28(ctx, base);
   }
@@ -288,9 +299,10 @@ extern "C" REX_FUNC(sub_82592538) {
     Count(10, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82592538(ctx, base);
-    RenderCaptureCall(10, "sub_82592538", args, base);
+    RenderCaptureCall(10, "sub_82592538", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82592538(ctx, base);
   }
@@ -301,9 +313,10 @@ extern "C" REX_FUNC(sub_825932D8) {
     Count(11, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825932D8(ctx, base);
-    RenderCaptureCall(11, "sub_825932D8", args, base);
+    RenderCaptureCall(11, "sub_825932D8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825932D8(ctx, base);
   }
@@ -314,9 +327,10 @@ extern "C" REX_FUNC(sub_82593588) {
     Count(12, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82593588(ctx, base);
-    RenderCaptureCall(12, "sub_82593588", args, base);
+    RenderCaptureCall(12, "sub_82593588", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82593588(ctx, base);
   }
@@ -327,9 +341,10 @@ extern "C" REX_FUNC(sub_82593A10) {
     Count(13, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82593A10(ctx, base);
-    RenderCaptureCall(13, "sub_82593A10", args, base);
+    RenderCaptureCall(13, "sub_82593A10", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82593A10(ctx, base);
   }
@@ -340,9 +355,10 @@ extern "C" REX_FUNC(sub_82593C50) {
     Count(14, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82593C50(ctx, base);
-    RenderCaptureCall(14, "sub_82593C50", args, base);
+    RenderCaptureCall(14, "sub_82593C50", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82593C50(ctx, base);
   }
@@ -353,9 +369,10 @@ extern "C" REX_FUNC(sub_82594C70) {
     Count(15, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82594C70(ctx, base);
-    RenderCaptureCall(15, "sub_82594C70", args, base);
+    RenderCaptureCall(15, "sub_82594C70", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82594C70(ctx, base);
   }
@@ -366,9 +383,10 @@ extern "C" REX_FUNC(sub_82594F38) {
     Count(16, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82594F38(ctx, base);
-    RenderCaptureCall(16, "sub_82594F38", args, base);
+    RenderCaptureCall(16, "sub_82594F38", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82594F38(ctx, base);
   }
@@ -379,9 +397,10 @@ extern "C" REX_FUNC(sub_82595170) {
     Count(17, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595170(ctx, base);
-    RenderCaptureCall(17, "sub_82595170", args, base);
+    RenderCaptureCall(17, "sub_82595170", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595170(ctx, base);
   }
@@ -392,9 +411,10 @@ extern "C" REX_FUNC(sub_82595370) {
     Count(18, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595370(ctx, base);
-    RenderCaptureCall(18, "sub_82595370", args, base);
+    RenderCaptureCall(18, "sub_82595370", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595370(ctx, base);
   }
@@ -405,9 +425,10 @@ extern "C" REX_FUNC(sub_825953D8) {
     Count(19, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825953D8(ctx, base);
-    RenderCaptureCall(19, "sub_825953D8", args, base);
+    RenderCaptureCall(19, "sub_825953D8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825953D8(ctx, base);
   }
@@ -418,9 +439,10 @@ extern "C" REX_FUNC(sub_82595458) {
     Count(20, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595458(ctx, base);
-    RenderCaptureCall(20, "sub_82595458", args, base);
+    RenderCaptureCall(20, "sub_82595458", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595458(ctx, base);
   }
@@ -431,9 +453,10 @@ extern "C" REX_FUNC(sub_825954C0) {
     Count(21, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825954C0(ctx, base);
-    RenderCaptureCall(21, "sub_825954C0", args, base);
+    RenderCaptureCall(21, "sub_825954C0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825954C0(ctx, base);
   }
@@ -444,9 +467,10 @@ extern "C" REX_FUNC(sub_82595570) {
     Count(22, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595570(ctx, base);
-    RenderCaptureCall(22, "sub_82595570", args, base);
+    RenderCaptureCall(22, "sub_82595570", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595570(ctx, base);
   }
@@ -457,9 +481,10 @@ extern "C" REX_FUNC(sub_82595620) {
     Count(23, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595620(ctx, base);
-    RenderCaptureCall(23, "sub_82595620", args, base);
+    RenderCaptureCall(23, "sub_82595620", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595620(ctx, base);
   }
@@ -470,9 +495,10 @@ extern "C" REX_FUNC(sub_82595690) {
     Count(24, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595690(ctx, base);
-    RenderCaptureCall(24, "sub_82595690", args, base);
+    RenderCaptureCall(24, "sub_82595690", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595690(ctx, base);
   }
@@ -483,9 +509,10 @@ extern "C" REX_FUNC(sub_825956D0) {
     Count(25, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825956D0(ctx, base);
-    RenderCaptureCall(25, "sub_825956D0", args, base);
+    RenderCaptureCall(25, "sub_825956D0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825956D0(ctx, base);
   }
@@ -496,9 +523,10 @@ extern "C" REX_FUNC(sub_82595780) {
     Count(26, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595780(ctx, base);
-    RenderCaptureCall(26, "sub_82595780", args, base);
+    RenderCaptureCall(26, "sub_82595780", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595780(ctx, base);
   }
@@ -509,9 +537,10 @@ extern "C" REX_FUNC(sub_825957E8) {
     Count(27, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825957E8(ctx, base);
-    RenderCaptureCall(27, "sub_825957E8", args, base);
+    RenderCaptureCall(27, "sub_825957E8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825957E8(ctx, base);
   }
@@ -522,9 +551,10 @@ extern "C" REX_FUNC(sub_82595FE8) {
     Count(28, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82595FE8(ctx, base);
-    RenderCaptureCall(28, "sub_82595FE8", args, base);
+    RenderCaptureCall(28, "sub_82595FE8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82595FE8(ctx, base);
   }
@@ -535,9 +565,10 @@ extern "C" REX_FUNC(sub_82596070) {
     Count(29, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82596070(ctx, base);
-    RenderCaptureCall(29, "sub_82596070", args, base);
+    RenderCaptureCall(29, "sub_82596070", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82596070(ctx, base);
   }
@@ -548,9 +579,10 @@ extern "C" REX_FUNC(sub_82596868) {
     Count(30, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82596868(ctx, base);
-    RenderCaptureCall(30, "sub_82596868", args, base);
+    RenderCaptureCall(30, "sub_82596868", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82596868(ctx, base);
   }
@@ -561,9 +593,10 @@ extern "C" REX_FUNC(sub_82596B68) {
     Count(31, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82596B68(ctx, base);
-    RenderCaptureCall(31, "sub_82596B68", args, base);
+    RenderCaptureCall(31, "sub_82596B68", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82596B68(ctx, base);
   }
@@ -574,9 +607,10 @@ extern "C" REX_FUNC(sub_82596C18) {
     Count(32, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82596C18(ctx, base);
-    RenderCaptureCall(32, "sub_82596C18", args, base);
+    RenderCaptureCall(32, "sub_82596C18", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82596C18(ctx, base);
   }
@@ -587,9 +621,10 @@ extern "C" REX_FUNC(sub_82596DF8) {
     Count(33, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82596DF8(ctx, base);
-    RenderCaptureCall(33, "sub_82596DF8", args, base);
+    RenderCaptureCall(33, "sub_82596DF8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82596DF8(ctx, base);
   }
@@ -600,9 +635,10 @@ extern "C" REX_FUNC(sub_825971A8) {
     Count(34, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825971A8(ctx, base);
-    RenderCaptureCall(34, "sub_825971A8", args, base);
+    RenderCaptureCall(34, "sub_825971A8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825971A8(ctx, base);
   }
@@ -613,9 +649,10 @@ extern "C" REX_FUNC(sub_82597268) {
     Count(35, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597268(ctx, base);
-    RenderCaptureCall(35, "sub_82597268", args, base);
+    RenderCaptureCall(35, "sub_82597268", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597268(ctx, base);
   }
@@ -626,9 +663,10 @@ extern "C" REX_FUNC(sub_82597840) {
     Count(36, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597840(ctx, base);
-    RenderCaptureCall(36, "sub_82597840", args, base);
+    RenderCaptureCall(36, "sub_82597840", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597840(ctx, base);
   }
@@ -639,9 +677,10 @@ extern "C" REX_FUNC(sub_82597AD8) {
     Count(37, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597AD8(ctx, base);
-    RenderCaptureCall(37, "sub_82597AD8", args, base);
+    RenderCaptureCall(37, "sub_82597AD8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597AD8(ctx, base);
   }
@@ -652,9 +691,10 @@ extern "C" REX_FUNC(sub_82597BA8) {
     Count(38, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597BA8(ctx, base);
-    RenderCaptureCall(38, "sub_82597BA8", args, base);
+    RenderCaptureCall(38, "sub_82597BA8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597BA8(ctx, base);
   }
@@ -665,9 +705,10 @@ extern "C" REX_FUNC(sub_82597C28) {
     Count(39, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597C28(ctx, base);
-    RenderCaptureCall(39, "sub_82597C28", args, base);
+    RenderCaptureCall(39, "sub_82597C28", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597C28(ctx, base);
   }
@@ -678,9 +719,10 @@ extern "C" REX_FUNC(sub_82597CB8) {
     Count(40, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597CB8(ctx, base);
-    RenderCaptureCall(40, "sub_82597CB8", args, base);
+    RenderCaptureCall(40, "sub_82597CB8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597CB8(ctx, base);
   }
@@ -691,9 +733,10 @@ extern "C" REX_FUNC(sub_82597D48) {
     Count(41, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597D48(ctx, base);
-    RenderCaptureCall(41, "sub_82597D48", args, base);
+    RenderCaptureCall(41, "sub_82597D48", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597D48(ctx, base);
   }
@@ -704,9 +747,10 @@ extern "C" REX_FUNC(sub_82597DA0) {
     Count(42, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82597DA0(ctx, base);
-    RenderCaptureCall(42, "sub_82597DA0", args, base);
+    RenderCaptureCall(42, "sub_82597DA0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82597DA0(ctx, base);
   }
@@ -717,9 +761,10 @@ extern "C" REX_FUNC(sub_825981E8) {
     Count(43, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825981E8(ctx, base);
-    RenderCaptureCall(43, "sub_825981E8", args, base);
+    RenderCaptureCall(43, "sub_825981E8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825981E8(ctx, base);
   }
@@ -730,9 +775,10 @@ extern "C" REX_FUNC(sub_82598868) {
     Count(44, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82598868(ctx, base);
-    RenderCaptureCall(44, "sub_82598868", args, base);
+    RenderCaptureCall(44, "sub_82598868", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82598868(ctx, base);
   }
@@ -744,9 +790,10 @@ extern "C" REX_FUNC(sub_825989D8) {
     Report();
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825989D8(ctx, base);
-    RenderCaptureCall(45, "sub_825989D8", args, base);
+    RenderCaptureCall(45, "sub_825989D8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825989D8(ctx, base);
   }
@@ -758,9 +805,10 @@ extern "C" REX_FUNC(sub_82598FC8) {
     Count(46, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82598FC8(ctx, base);
-    RenderCaptureCall(46, "sub_82598FC8", args, base);
+    RenderCaptureCall(46, "sub_82598FC8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82598FC8(ctx, base);
   }
@@ -771,9 +819,10 @@ extern "C" REX_FUNC(sub_825991C0) {
     Count(47, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825991C0(ctx, base);
-    RenderCaptureCall(47, "sub_825991C0", args, base);
+    RenderCaptureCall(47, "sub_825991C0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825991C0(ctx, base);
   }
@@ -784,9 +833,10 @@ extern "C" REX_FUNC(sub_825992F0) {
     Count(48, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825992F0(ctx, base);
-    RenderCaptureCall(48, "sub_825992F0", args, base);
+    RenderCaptureCall(48, "sub_825992F0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825992F0(ctx, base);
   }
@@ -797,9 +847,10 @@ extern "C" REX_FUNC(sub_82599680) {
     Count(49, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82599680(ctx, base);
-    RenderCaptureCall(49, "sub_82599680", args, base);
+    RenderCaptureCall(49, "sub_82599680", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82599680(ctx, base);
   }
@@ -810,9 +861,10 @@ extern "C" REX_FUNC(sub_825999D8) {
     Count(50, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825999D8(ctx, base);
-    RenderCaptureCall(50, "sub_825999D8", args, base);
+    RenderCaptureCall(50, "sub_825999D8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825999D8(ctx, base);
   }
@@ -823,9 +875,10 @@ extern "C" REX_FUNC(sub_82599A88) {
     Count(51, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_82599A88(ctx, base);
-    RenderCaptureCall(51, "sub_82599A88", args, base);
+    RenderCaptureCall(51, "sub_82599A88", args, ctx.r3.u32, base);
   } else {
     __imp__sub_82599A88(ctx, base);
   }
@@ -836,9 +889,10 @@ extern "C" REX_FUNC(sub_8259A450) {
     Count(52, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259A450(ctx, base);
-    RenderCaptureCall(52, "sub_8259A450", args, base);
+    RenderCaptureCall(52, "sub_8259A450", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259A450(ctx, base);
   }
@@ -849,9 +903,10 @@ extern "C" REX_FUNC(sub_8259A500) {
     Count(53, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259A500(ctx, base);
-    RenderCaptureCall(53, "sub_8259A500", args, base);
+    RenderCaptureCall(53, "sub_8259A500", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259A500(ctx, base);
   }
@@ -862,9 +917,10 @@ extern "C" REX_FUNC(sub_8259B578) {
     Count(54, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B578(ctx, base);
-    RenderCaptureCall(54, "sub_8259B578", args, base);
+    RenderCaptureCall(54, "sub_8259B578", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B578(ctx, base);
   }
@@ -875,9 +931,10 @@ extern "C" REX_FUNC(sub_8259B5D0) {
     Count(55, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B5D0(ctx, base);
-    RenderCaptureCall(55, "sub_8259B5D0", args, base);
+    RenderCaptureCall(55, "sub_8259B5D0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B5D0(ctx, base);
   }
@@ -888,9 +945,10 @@ extern "C" REX_FUNC(sub_8259B6B8) {
     Count(56, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B6B8(ctx, base);
-    RenderCaptureCall(56, "sub_8259B6B8", args, base);
+    RenderCaptureCall(56, "sub_8259B6B8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B6B8(ctx, base);
   }
@@ -901,9 +959,10 @@ extern "C" REX_FUNC(sub_8259B708) {
     Count(57, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B708(ctx, base);
-    RenderCaptureCall(57, "sub_8259B708", args, base);
+    RenderCaptureCall(57, "sub_8259B708", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B708(ctx, base);
   }
@@ -914,9 +973,10 @@ extern "C" REX_FUNC(sub_8259B7E8) {
     Count(58, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B7E8(ctx, base);
-    RenderCaptureCall(58, "sub_8259B7E8", args, base);
+    RenderCaptureCall(58, "sub_8259B7E8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B7E8(ctx, base);
   }
@@ -927,9 +987,10 @@ extern "C" REX_FUNC(sub_8259B800) {
     Count(59, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B800(ctx, base);
-    RenderCaptureCall(59, "sub_8259B800", args, base);
+    RenderCaptureCall(59, "sub_8259B800", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B800(ctx, base);
   }
@@ -940,9 +1001,10 @@ extern "C" REX_FUNC(sub_8259B9A0) {
     Count(60, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B9A0(ctx, base);
-    RenderCaptureCall(60, "sub_8259B9A0", args, base);
+    RenderCaptureCall(60, "sub_8259B9A0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B9A0(ctx, base);
   }
@@ -953,9 +1015,10 @@ extern "C" REX_FUNC(sub_8259B9B8) {
     Count(61, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259B9B8(ctx, base);
-    RenderCaptureCall(61, "sub_8259B9B8", args, base);
+    RenderCaptureCall(61, "sub_8259B9B8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259B9B8(ctx, base);
   }
@@ -966,9 +1029,10 @@ extern "C" REX_FUNC(sub_8259BC90) {
     Count(62, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259BC90(ctx, base);
-    RenderCaptureCall(62, "sub_8259BC90", args, base);
+    RenderCaptureCall(62, "sub_8259BC90", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259BC90(ctx, base);
   }
@@ -979,9 +1043,10 @@ extern "C" REX_FUNC(sub_8259BDC0) {
     Count(63, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259BDC0(ctx, base);
-    RenderCaptureCall(63, "sub_8259BDC0", args, base);
+    RenderCaptureCall(63, "sub_8259BDC0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259BDC0(ctx, base);
   }
@@ -992,9 +1057,10 @@ extern "C" REX_FUNC(sub_8259C038) {
     Count(64, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C038(ctx, base);
-    RenderCaptureCall(64, "sub_8259C038", args, base);
+    RenderCaptureCall(64, "sub_8259C038", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C038(ctx, base);
   }
@@ -1005,9 +1071,10 @@ extern "C" REX_FUNC(sub_8259C150) {
     Count(65, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C150(ctx, base);
-    RenderCaptureCall(65, "sub_8259C150", args, base);
+    RenderCaptureCall(65, "sub_8259C150", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C150(ctx, base);
   }
@@ -1018,9 +1085,10 @@ extern "C" REX_FUNC(sub_8259C2A8) {
     Count(66, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C2A8(ctx, base);
-    RenderCaptureCall(66, "sub_8259C2A8", args, base);
+    RenderCaptureCall(66, "sub_8259C2A8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C2A8(ctx, base);
   }
@@ -1031,9 +1099,10 @@ extern "C" REX_FUNC(sub_8259C3D0) {
     Count(67, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C3D0(ctx, base);
-    RenderCaptureCall(67, "sub_8259C3D0", args, base);
+    RenderCaptureCall(67, "sub_8259C3D0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C3D0(ctx, base);
   }
@@ -1044,9 +1113,10 @@ extern "C" REX_FUNC(sub_8259C470) {
     Count(68, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C470(ctx, base);
-    RenderCaptureCall(68, "sub_8259C470", args, base);
+    RenderCaptureCall(68, "sub_8259C470", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C470(ctx, base);
   }
@@ -1057,9 +1127,10 @@ extern "C" REX_FUNC(sub_8259C530) {
     Count(69, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_8259C530(ctx, base);
-    RenderCaptureCall(69, "sub_8259C530", args, base);
+    RenderCaptureCall(69, "sub_8259C530", args, ctx.r3.u32, base);
   } else {
     __imp__sub_8259C530(ctx, base);
   }
@@ -1070,9 +1141,10 @@ extern "C" REX_FUNC(sub_825A1658) {
     Count(70, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A1658(ctx, base);
-    RenderCaptureCall(70, "sub_825A1658", args, base);
+    RenderCaptureCall(70, "sub_825A1658", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A1658(ctx, base);
   }
@@ -1083,9 +1155,10 @@ extern "C" REX_FUNC(sub_825A16D0) {
     Count(71, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A16D0(ctx, base);
-    RenderCaptureCall(71, "sub_825A16D0", args, base);
+    RenderCaptureCall(71, "sub_825A16D0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A16D0(ctx, base);
   }
@@ -1096,9 +1169,10 @@ extern "C" REX_FUNC(sub_825A16E8) {
     Count(72, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A16E8(ctx, base);
-    RenderCaptureCall(72, "sub_825A16E8", args, base);
+    RenderCaptureCall(72, "sub_825A16E8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A16E8(ctx, base);
   }
@@ -1109,9 +1183,10 @@ extern "C" REX_FUNC(sub_825A17B0) {
     Count(73, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A17B0(ctx, base);
-    RenderCaptureCall(73, "sub_825A17B0", args, base);
+    RenderCaptureCall(73, "sub_825A17B0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A17B0(ctx, base);
   }
@@ -1122,9 +1197,10 @@ extern "C" REX_FUNC(sub_825A17F0) {
     Count(74, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A17F0(ctx, base);
-    RenderCaptureCall(74, "sub_825A17F0", args, base);
+    RenderCaptureCall(74, "sub_825A17F0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A17F0(ctx, base);
   }
@@ -1135,9 +1211,10 @@ extern "C" REX_FUNC(sub_825A1C78) {
     Count(75, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A1C78(ctx, base);
-    RenderCaptureCall(75, "sub_825A1C78", args, base);
+    RenderCaptureCall(75, "sub_825A1C78", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A1C78(ctx, base);
   }
@@ -1148,9 +1225,10 @@ extern "C" REX_FUNC(sub_825A1DE8) {
     Count(76, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A1DE8(ctx, base);
-    RenderCaptureCall(76, "sub_825A1DE8", args, base);
+    RenderCaptureCall(76, "sub_825A1DE8", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A1DE8(ctx, base);
   }
@@ -1161,9 +1239,10 @@ extern "C" REX_FUNC(sub_825A1FA0) {
     Count(77, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A1FA0(ctx, base);
-    RenderCaptureCall(77, "sub_825A1FA0", args, base);
+    RenderCaptureCall(77, "sub_825A1FA0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A1FA0(ctx, base);
   }
@@ -1174,9 +1253,10 @@ extern "C" REX_FUNC(sub_825A2158) {
     Count(78, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A2158(ctx, base);
-    RenderCaptureCall(78, "sub_825A2158", args, base);
+    RenderCaptureCall(78, "sub_825A2158", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A2158(ctx, base);
   }
@@ -1187,9 +1267,10 @@ extern "C" REX_FUNC(sub_825A22A0) {
     Count(79, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A22A0(ctx, base);
-    RenderCaptureCall(79, "sub_825A22A0", args, base);
+    RenderCaptureCall(79, "sub_825A22A0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A22A0(ctx, base);
   }
@@ -1200,9 +1281,10 @@ extern "C" REX_FUNC(sub_825A2380) {
     Count(80, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A2380(ctx, base);
-    RenderCaptureCall(80, "sub_825A2380", args, base);
+    RenderCaptureCall(80, "sub_825A2380", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A2380(ctx, base);
   }
@@ -1213,9 +1295,10 @@ extern "C" REX_FUNC(sub_825A25A0) {
     Count(81, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A25A0(ctx, base);
-    RenderCaptureCall(81, "sub_825A25A0", args, base);
+    RenderCaptureCall(81, "sub_825A25A0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A25A0(ctx, base);
   }
@@ -1226,9 +1309,10 @@ extern "C" REX_FUNC(sub_825A40C0) {
     Count(82, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A40C0(ctx, base);
-    RenderCaptureCall(82, "sub_825A40C0", args, base);
+    RenderCaptureCall(82, "sub_825A40C0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A40C0(ctx, base);
   }
@@ -1239,9 +1323,10 @@ extern "C" REX_FUNC(sub_825A5D18) {
     Count(83, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A5D18(ctx, base);
-    RenderCaptureCall(83, "sub_825A5D18", args, base);
+    RenderCaptureCall(83, "sub_825A5D18", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A5D18(ctx, base);
   }
@@ -1252,9 +1337,10 @@ extern "C" REX_FUNC(sub_825A88C0) {
     Count(84, ctx);
   }
   if (RenderCaptureActive()) {
-    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
     __imp__sub_825A88C0(ctx, base);
-    RenderCaptureCall(84, "sub_825A88C0", args, base);
+    RenderCaptureCall(84, "sub_825A88C0", args, ctx.r3.u32, base);
   } else {
     __imp__sub_825A88C0(ctx, base);
   }

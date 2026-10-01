@@ -27,31 +27,50 @@ names = [e[0] for e in layer["entries"]]
 
 
 def read_game(path):
+    """Game capture: list of calls, list of draws. Objects end up in
+    read_game.objects, data records ('MEM ') in read_game.memory."""
     raw = open(path, "rb").read()
     off = 0
-    events, draws, objects = [], [], {}
+    version = 1
+    if struct.unpack_from("<I", raw, 0)[0] == 0x4353464E:  # 'NFSC'
+        version = struct.unpack_from("<I", raw, 4)[0]
+        off = 8
+    nargs = 6 if version == 1 else 8
+    events, draws, objects, memory = [], [], {}, []
     while off < len(raw):
         magic = struct.unpack_from("<I", raw, off)[0]
         if magic == 0x204A424F:  # 'OBJ '
             _, seq, kind, address, size = struct.unpack_from("<5I", raw, off)
             off += 20
-            objects[address] = {"kind": kind, "seq": seq, "bytes": raw[off:off + size]}
+            objects.setdefault(address, {"kind": kind, "seq": seq, "bytes": raw[off:off + size]})
+            if kind >= 0x100 and events:
+                events[-1].setdefault("ptr", {})[kind - 0x100] = raw[off:off + size]
             off += size
             continue
-        magic, seq, entry, *args = struct.unpack_from("<9I", raw, off)
-        off += 36
-        rec = {"seq": seq, "name": names[entry], "args": args}
-        if magic == 0x57415244:
+        if magic == 0x204D454D:  # 'MEM '
+            _, seq, address, size = struct.unpack_from("<4I", raw, off)
+            off += 16
+            memory.append((seq, address, off, size))
+            off += size
+            continue
+        magic, seq, entry, *rest = struct.unpack_from(f"<{3 + nargs + (version > 1)}I", raw, off)
+        off += 4 * (3 + nargs + (version > 1))
+        rec = {"seq": seq, "name": names[entry], "args": rest[:nargs],
+               "result": rest[nargs] if version > 1 else None}
+        if magic in (0x57415244, 0x52545645):  # 'DRAW', 'EVTR'
             (n,) = struct.unpack_from("<I", raw, off)
             off += 4
             rec["regs"] = np.frombuffer(raw, "<u4", n, off)
             off += 4 * n
+        if magic == 0x57415244:
             (m,) = struct.unpack_from("<I", raw, off)
             rec["objects"] = struct.unpack_from(f"<{m}I", raw, off + 4)
             off += 4 + 4 * m
             draws.append(rec)
         events.append(rec)
     read_game.objects = objects
+    read_game.memory = memory
+    read_game.raw = raw
     return events, draws
 
 
@@ -183,4 +202,4 @@ if os.environ.get("EVENTS"):
     last = gdraws[len(matches) - 1]
     i = next(j for j, e in enumerate(events) if e is last)
     for e in events[i - 2:i + 40]:
-        print(e["seq"], e["name"], " ".join(f"{a:08X}" for a in e["args"]), "DRAW" if "regs" in e else "")
+        print(e["seq"], e["name"], " ".join(f"{a:08X}" for a in e["args"]), "DRAW" if "objects" in e else "")
