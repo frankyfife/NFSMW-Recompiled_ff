@@ -421,6 +421,20 @@ and the game's main thread:
 - Left on the renderer thread: mostly the D3D12 driver and Draw itself; on
   the game thread the recording is ~15 % (was 41 %).
 
+**Rare unusable vertex shaders, fixed:** in some runs without frame limit
+2-7 vertex shaders a run could not be analyzed (the draw was skipped). Their
+microcode was one control flow triple followed by ordinary PM4 packets. When
+the D3D library runs out of room in the command buffer while it writes the
+shader loads (`sub_825A3AF0`), it continues in a new segment
+(`sub_82597268`, census entry 35, returns the new write pointer). The scan
+went from the old write pointer to the new one and read older commands in
+between, among them stale inline shader packets whose rest had been
+overwritten. The scan now starts at the last segment the library began
+during the call; a scan whose packets do not end at the write pointer is not
+used (counted in the log). Measured: during loading alone 30+ such scans
+before, 0 now; two runs of 3 minutes with driving, no frame limit: 0
+unusable, 0 unpatched vertex shaders.
+
 **Dynamic shadows (car shadow), fixed:** for vertex shaders it patches and
 links to the pixel shader (`sub_825A37D8`), the library does not load the
 microcode from an address: it copies the patched program into the command

@@ -120,6 +120,7 @@ constexpr uint32_t kImmediateLoad = 0xC0002B00;  // PM4 IM_LOAD_IMMEDIATE (count
 // Entry indices (tools/renderprobe/d3d_layer.json).
 enum : int {
   kEntryFlush = 82,  // sub_825A40C0: writes the dirty state out before a draw
+  kEntrySegment = 35,  // sub_82597268: a new command buffer segment (returns its write pointer)
   kEntryResolve = 10,
   kEntryBeginVertices = 11,
   kEntryDrawVerticesUP = 12,
@@ -260,6 +261,9 @@ class Parallel {
   // changes.
   uint32_t scanned_vs_ = 0, scanned_vs_object_ = 0, scanned_vs_dwords_ = 0;
   bool scanned_vs_copied_ = false;
+  // Shader load scans whose packets did not end where the library stopped
+  // writing (their loads are not used).
+  std::atomic<uint64_t> walks_misaligned_{0};
   std::vector<uint8_t> scanned_vs_code_;
   uint64_t scanned_vs_hash_ = 0;
 
@@ -334,7 +338,15 @@ uint32_t Parallel::AddCodeCopy(const std::vector<uint8_t>& code, uint32_t addres
   return offset;
 }
 
+// The command buffer write pointer of the last segment the D3D library
+// started on this thread (0: none since the shader load scan began).
+thread_local uint32_t t_segment_start = 0;
+
 void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t* base) {
+  if (entry == kEntrySegment) {
+    t_segment_start = result;
+    return;
+  }
   auto* kernel = rex::system::kernel_state();
   uint8_t* physical = kernel && kernel->memory() ? kernel->memory()->physical_membase() : nullptr;
   if (!physical) {
@@ -492,6 +504,10 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
   // Packet by packet (what the function writes starts after the last dword
   // written before): payloads like constants or vertex data would otherwise
   // be taken for headers.
+  // The last vertex shader load the packets have (address, inline dwords or
+  // 0), taken only if the walk ends where the library stopped writing.
+  uint32_t load_address = 0, load_dwords = 0;
+  uint32_t walk_end = before + 4;
   for (uint32_t p = before + 4, next; p + 8 <= after; p = next) {
     const uint32_t header = LoadBE32(base + p);
     switch (header >> 30) {
@@ -506,6 +522,7 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
         next = p + 4;
         break;
     }
+    walk_end = next;
     if (header >> 30 != 3) {
       continue;
     }
@@ -514,7 +531,8 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
       const uint32_t address_type = LoadBE32(base + p + 4);
       if ((address_type & 3) == 0) {
         const uint32_t address = address_type & ~3u;
-        keep(address, 0);
+        load_address = address;
+        load_dwords = 0;
       }
     } else if ((header & 0xC000FF00) == kImmediateLoad) {
       // IM_LOAD_IMMEDIATE: type, start | size, then the microcode inline. The
@@ -523,9 +541,19 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
       // shader (sub_825A37D8): that copy is what runs.
       const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
       if ((LoadBE32(base + p + 4) & 3) == 0 && count > 2) {
-        keep(GuestToPhysical(p + 12), count - 2);
+        load_address = GuestToPhysical(p + 12);
+        load_dwords = count - 2;
       }
     }
+  }
+  // The last packet ends after the last dword written (short trailing
+  // packets are not walked).
+  if (walk_end > after + 4 || walk_end + 4 < after) {
+    ++walks_misaligned_;
+    return;
+  }
+  if (load_address) {
+    keep(load_address, load_dwords);
   }
 }
 
@@ -665,6 +693,10 @@ void Parallel::Thread() {
           s.resolves, s.texture_tables_reused, s.index_ranges_reused, s.bytes_uploaded >> 10, s.occlusion_reports, s.occlusion_samples, s.textures_loaded,
           s.textures_reloaded, s.textures_unsupported, s.pipelines, s.pipeline_failures,
           s.texture_ms, s.flush_ms);
+      if (const uint64_t misaligned = walks_misaligned_.exchange(0)) {
+        REXLOG_WARN("[native renderer] {} shader load scans did not end at the write pointer",
+                    misaligned);
+      }
       if (verify_dirty_) {
         REXLOG_INFO("[native renderer] constant chunks changed outside the dirty masks: {}",
                     dirty_missed_.exchange(0));
@@ -807,8 +839,14 @@ extern "C" REX_FUNC(sub_825A3AF0) {
     return;
   }
   const uint32_t device = ctx.r3.u32;
-  const uint32_t before = LoadBE32(base + device);
+  uint32_t before = LoadBE32(base + device);
+  t_segment_start = 0;
   __imp__sub_825A3AF0(ctx, base);
+  // When the library ran out of room it continued in a new segment: what it
+  // wrote is from there on, the memory after `before` is older commands.
+  if (t_segment_start) {
+    before = t_segment_start;
+  }
   Parallel::Get().ShaderLoadsWritten(base, device, before, LoadBE32(base + device));
 }
 
