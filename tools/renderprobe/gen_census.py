@@ -81,6 +81,13 @@ void Report() {
 }
 }  // namespace
 """)
+out.append("""
+// render_capture.cpp: records one frame of D3D calls (and the device's
+// register shadow at every draw) for comparison with the GPU thread.
+bool RenderCaptureActive();
+void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint8_t* base);
+void RenderCaptureSwapDone();
+""")
 for i, f in enumerate(entries):
     out.append(f'extern "C" REX_FUNC(__imp__{f});')
     out.append(f'extern "C" REX_FUNC({f}) {{')
@@ -89,7 +96,15 @@ for i, f in enumerate(entries):
     if f == swap:
         out.append("    Report();")
     out.append("  }")
-    out.append(f"  __imp__{f}(ctx, base);")
+    out.append("  if (RenderCaptureActive()) {")
+    out.append("    const uint32_t args[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};")
+    out.append(f"    __imp__{f}(ctx, base);")
+    out.append(f'    RenderCaptureCall({i}, "{f}", args, base);')
+    out.append("  } else {")
+    out.append(f"    __imp__{f}(ctx, base);")
+    out.append("  }")
+    if f == swap:
+        out.append("  RenderCaptureSwapDone();")
     out.append("}")
 path = os.path.join(HERE, "..", "..", "app", "src", "render_census.cpp")
 open(path, "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")

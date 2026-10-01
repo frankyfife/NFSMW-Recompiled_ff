@@ -146,6 +146,46 @@ inclusive):
   processing. That would be about 1.5–2× more throughput. It is the much
   larger effort.
 
+## Stage 1 result: the state can be reconstructed from the device (2026-10-01)
+
+**Setup:**
+- With `--render_capture_frame=N`, the game side records every D3D call of
+  frame N into `capture_game_N.bin` (`app/src/render_capture.cpp`). At every
+  draw it also records the complete register shadow, read with the decoded
+  layout (table above).
+- With `--gpu_capture_frame=N`, the GPU thread records its register file at
+  every draw packet of the same frame into `capture_cp_N.bin`. This is an SDK
+  patch in `CommandProcessor::ExecutePacketType3Draw`; frames are counted
+  through XE_SWAP.
+- `tools/renderprobe/compare_capture.py <build> N` matches the draws by
+  primitive type and index count and compares all 2401 registers.
+
+**Frame 6500 while driving:**
+- Game: 2684 draws (after removing 17 inner draws: DrawIndexedVerticesUP
+  calls DrawVerticesUP). GPU thread: 5268 draws.
+- **2625 of 2635 matched draws are bit-identical across all 2401 registers.**
+  The other 10 are UP draws: the library writes their fetch slot 31
+  (`0x48BA`–`0x48BF`) directly into the command buffer, bypassing the shadow.
+- 10 CP draws are internal to the D3D library (RECTLIST with 3 vertices:
+  clear/resolve).
+- **The remaining 2623 CP draws are predicated tiling.** At the end of the
+  frame, `sub_825991C0` sets tile masks (0x3/0xC/0x30) and `sub_82592538`
+  resolves per tile. The scene recorded once is replayed per tile, with its
+  own surface, viewport and window registers (`0x2000`, `0x2002`, `0x210F`–
+  `0x2112`, `0x2180` …).
+- The SDK does honour the bin masks per packet, but it still executes the
+  replays. On hardware they are needed because the EDRAM holds only one tile;
+  in the emulation the render targets are not limited. **About half of the
+  draws on the GPU thread are replays that an own renderer could drop.**
+
+**Conclusion of stage 1:**
+- For an own renderer, the state of every game draw can be taken from the
+  device shadow; nothing has to be read from the command stream.
+- Special cases so far: UP draws (fetch slot 31 from the call arguments),
+  clear/resolve inside the library, and the tiling sequence. A native
+  renderer draws each scene once and replaces the per-tile resolves with one
+  resolve each.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,
