@@ -562,6 +562,17 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
           "the render scale.");
     }
 
+    if (nativo && ExisteCvar("native_renderer_mipmaps")) {
+      static const Opcion kMip[] = {{"The game's", "0"}, {"Sharper (one level)", "1"},
+                                    {"Off (full-size textures only)", "2"}};
+      ComboSimple("Mipmaps", CvarS("native_renderer_mipmaps"), kMip, 3, nullptr,
+                  [this](const char* v) {
+                    SetCvarS("native_renderer_mipmaps", v);
+                    Persistir();
+                  });
+      MarcaVivo("applies instantly");
+    }
+
     if (ExisteCvar("post_processing")) {
       bool post = CvarB("post_processing");
       if (ImGui::Checkbox("Post-processing (visual treatment)", &post)) {

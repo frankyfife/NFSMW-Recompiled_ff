@@ -435,9 +435,10 @@ QWidget* LauncherWindow::buildContent() {
   cr->addWidget(customFps_);
   cr->addWidget(fpsNote_, 1);
   frame->addRow(QStringLiteral("Custom fps"), customRow);
-  vsync_ = new ToggleSwitch(
-      QStringLiteral("V-Sync (leave off with G-Sync/FreeSync)"));
+  vsync_ = new ToggleSwitch(QStringLiteral("V-Sync (no tearing)"));
   frame->addWide(vsync_);
+  vsyncNote_ = note();
+  frame->grid()->addWidget(vsyncNote_, frame->grid()->rowCount(), 0, 1, 2);
   connect(fps_, &Segmented::currentIndexChanged, this, onChange);
   connect(customFps_, &QSpinBox::valueChanged, this, onChange);
   connect(vsync_, &ToggleSwitch::toggled, this, onChange);
@@ -451,12 +452,18 @@ QWidget* LauncherWindow::buildContent() {
   msaa_ = new Segmented({QStringLiteral("Off"), QStringLiteral("2×"), QStringLiteral("4× · Game"),
                          QStringLiteral("8×")});
   image->addRow(QStringLiteral("MSAA"), msaa_);
+  mipmaps_ = new Segmented(
+      {QStringLiteral("Game"), QStringLiteral("Sharper"), QStringLiteral("Off")});
+  image->addRow(QStringLiteral("Mipmaps"), mipmaps_);
+  connect(mipmaps_, &Segmented::currentIndexChanged, this, onChange);
   postProcessing_ = new ToggleSwitch(
       QStringLiteral("Post-processing (colour grading, bloom, motion blur)"));
   image->addWide(postProcessing_);
   image->grid()->addWidget(
       note(QStringLiteral("MSAA: the samples of the targets the game draws with multisampling, "
-                          "on top of the render scale. Post-processing off shows the plain "
+                          "on top of the render scale. Mipmaps: Sharper uses one level "
+                          "finer textures, Off only the full-size ones (sharpest, distant "
+                          "surfaces shimmer). Post-processing off shows the plain "
                           "picture, without the game's green-yellow tint; also live in the ESC "
                           "menu.")),
       image->grid()->rowCount(), 0, 1, 2);
@@ -649,7 +656,11 @@ void LauncherWindow::loadSettings() {
   fps_->setCurrentIndex(fps == "60" ? 1 : fps == "unlimited" ? 2 : fps == "custom" ? 3 : 0);
   customFps_->setValue(s.value("frame/fps", 60).toInt());
   // v2: V-Sync off by default -it measured worse- and the old key is ignored.
-  vsync_->setChecked(s.value("frame/vsync2", false).toBool());
+  // v3: V-Sync on by default. Measured at 120 fps on a 120 Hz VRR display:
+  // without it 23 % of the presents came sooner than a refresh (each one a
+  // tear), with it every frame was shown 8.2-8.5 ms after the previous, none
+  // twice, and the latency was the same (11.8 ms frame start -> present).
+  vsync_->setChecked(s.value("frame/vsync3", true).toBool());
 
   const qsizetype an = kAnisoValues.indexOf(s.value("image/anisotropic", 4).toInt());
   aniso_->setCurrentIndex(an >= 0 ? int(an) : 3);
@@ -659,6 +670,7 @@ void LauncherWindow::loadSettings() {
   const qsizetype ms = kMsaaValues.indexOf(s.value("image/msaa", -1).toInt());
   msaa_->setCurrentIndex(ms >= 0 ? int(ms) : 2);
   postProcessing_->setChecked(s.value("image/post_processing", true).toBool());
+  mipmaps_->setCurrentIndex(std::clamp(s.value("image/mipmaps", 0).toInt(), 0, 2));
 
 
   pacingAtGuest_->setChecked(s.value("advanced/pacing_at_guest", true).toBool());
@@ -686,12 +698,13 @@ void LauncherWindow::saveSettings() const {
   static const char* const kFpsModes[] = {"30", "60", "unlimited", "custom"};
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
-  s.setValue("frame/vsync2", vsync_->isChecked());
+  s.setValue("frame/vsync3", vsync_->isChecked());
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
   s.setValue("image/sharpness", sharpness_->value());
   s.setValue("image/msaa", kMsaaValues[msaa_->currentIndex()]);
   s.setValue("image/post_processing", postProcessing_->isChecked());
+  s.setValue("image/mipmaps", mipmaps_->currentIndex());
   s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
   s.setValue("advanced/low_latency", lowLatency_->isChecked());
   s.setValue("advanced/adaptive_pacing", adaptivePacing_->isChecked());
@@ -783,9 +796,9 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   // (flips every 16/33/50 ms instead of 33). So the game gets a vblank every
   // millisecond -it never misses a slot- and the pace is set by
   // frame_pacing_fps, a precise clock in the GPU thread: measured 33.1-33.5 ms
-  // per frame at 30 and 16.4-16.9 ms at 60. V-Sync only decides whether the
-  // host waits for the display; it adds a second clock and some judder, so
-  // it is off by default (G-Sync/FreeSync removes the tearing).
+  // per frame at 30 and 16.4-16.9 ms at 60. V-Sync decides whether the host
+  // waits for the display: on by default (see loadSettings for the
+  // measurement; with G-Sync/FreeSync it only acts at the top of the range).
   a << flag("vsync", vsync_->isChecked());
   a << opt("guest_vblank_rate", "1000");
   a << opt("frame_pacing_fps", QString::number(targetFps()));
@@ -796,6 +809,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << opt("native_renderer_anisotropic", QString::number(kAnisoValues[aniso_->currentIndex()]));
   a << opt("native_renderer_msaa", QString::number(kMsaaValues[msaa_->currentIndex()]));
   a << flag("post_processing", postProcessing_->isChecked());
+  a << opt("native_renderer_mipmaps", QString::number(mipmaps_->currentIndex()));
   a << opt("fov_scale", QString::number(fov_->value() / 100.0, 'f', 2));
   // Advanced tab (see buildAdvanced for what each one does).
   a << flag("frame_pacing_at_guest", pacingAtGuest_->isChecked());
@@ -867,6 +881,15 @@ void LauncherWindow::refresh() {
     setNote(fpsNote_, QStringLiteral("Evenly paced at %1 fps. Physics run on real time, so game "
                                      "speed is the same at any frame rate.")
                           .arg(fps));
+  }
+
+  if (vsync_->isChecked()) {
+    setNote(vsyncNote_, QStringLiteral("Every frame waits for the monitor's refresh: no tearing. "
+                                       "Measured: no extra latency."));
+  } else {
+    setNote(vsyncNote_, QStringLiteral("Frames faster than the monitor's refresh tear (at 120 fps "
+                                       "on 120 Hz: about a quarter of them)."),
+            "warn");
   }
 
   const bool sharpen = filter_->currentIndex() != 0;

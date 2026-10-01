@@ -54,6 +54,11 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 - **Supersampling:** the launcher's *Render scale* draws the frame at 2×, 3× or 4×
   1280 × 720 (on top of the game's own 4× MSAA): much smoother edges, sharper textures.
 - **MSAA:** the game's multisampled targets with 1, 2, 4 (the game's) or 8 samples.
+- **Mipmaps:** the game's, one level sharper, or off (full-size textures only), live.
+- **No half-loaded textures:** the renderer draws a frame or two after the game; a
+  texture whose memory changed is only reloaded once the new content is seen again a
+  frame later (white or garbage textures flashed for a frame when the game was already
+  streaming new data into memory it had freed).
 - **Post-processing switch:** the game's visual treatment (the green-yellow colour
   grading, bloom, vignette, motion blur) can be switched off, live; the game then
   copies the plain picture with its own `screen_passthru` technique.
@@ -108,6 +113,7 @@ How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
 | Frame pacing at 60 fps | flips every 16 / 33 / 50 ms | **16.3–17.1 ms**, a precise clock instead of vblank slots |
 | G-Sync / FreeSync | tearing despite VRR: the UI repainted on every monitor refresh, **180 presents for 60 frames** | **one present per game frame**, VRR stays in range, no tearing |
 | V-Sync | locked to the display's *nominal* rate, a hitch every 8.3 s on a 120.24 Hz panel | frame clock locked to the compositor's real refresh |
+| Tearing at 120 fps on a 120 Hz VRR display | V-Sync off: **23 % of the presents** came sooner than a refresh, each one a tear | V-Sync on by default: every frame shown 8.2–8.5 ms after the previous, none twice, same latency (11.8 ms frame start → present) |
 
 ### Lower input latency
 

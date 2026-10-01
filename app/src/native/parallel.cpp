@@ -62,6 +62,9 @@ REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
 REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
                      "With native_renderer: background threads that create pipelines (0 = "
                      "when first needed, the renderer waits)");
+REXCVAR_DEFINE_INT32(native_renderer_mipmaps, 0, "Debug",
+                     "With native_renderer: texture mipmaps (0 = the game's, 1 = one level "
+                     "sharper, 2 = off: only the largest level)");
 REXCVAR_DEFINE_INT32(native_renderer_msaa, -1, "Debug",
                      "With native_renderer: samples of the targets the game draws with MSAA "
                      "(-1 = the game's 4, 0 = off, 1 = 2x, 2 = 4x, 3 = 8x)");
@@ -730,6 +733,19 @@ void Parallel::Thread() {
                     misaligned);
       }
       {
+        static uint64_t logged_deferred = 0, logged_reloaded = 0;
+        if (s.textures_changes_deferred != logged_deferred ||
+            s.textures_reloaded_total != logged_reloaded) {
+          REXLOG_INFO("[native renderer] texture memory in 10 s: {} changes seen, {} textures "
+                      "loaded again (a change is only taken once it is seen again a frame "
+                      "later)",
+                      s.textures_changes_deferred - logged_deferred,
+                      s.textures_reloaded_total - logged_reloaded);
+          logged_deferred = s.textures_changes_deferred;
+          logged_reloaded = s.textures_reloaded_total;
+        }
+      }
+      {
         static uint32_t logged_msaa = 0;
         if (s.msaa_samples && s.msaa_samples != logged_msaa) {
           logged_msaa = s.msaa_samples;
@@ -787,6 +803,7 @@ void Parallel::Thread() {
 }
 
 void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
+  renderer.SetMipMode(std::clamp(REXCVAR_GET(native_renderer_mipmaps), 0, 2));
   renderer.BeginFrame();
   renderer.ResetFrameStats();
   // Registers outside the shadow stay zero (only the defaults below are set);
@@ -865,7 +882,8 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     up_fetch[1] = up_fetch_saved[1];
   }
   // NATIVE_SAVE_FRONT=<png path>: the front buffer every 300 frames (diagnostics).
-  if (const char* save_path = std::getenv("NATIVE_SAVE_FRONT")) {
+  static const char* const save_front = std::getenv("NATIVE_SAVE_FRONT");
+  if (const char* save_path = save_front) {
     static uint32_t save_count = 0;
     if (++save_count % 300 == 0) {
       renderer.SaveResolved(frame.front_buffer, save_path, false);
@@ -908,11 +926,15 @@ extern "C" REX_FUNC(sub_825A3AF0) {
   // for reverse engineering.
   // NFSMW_DUMP_IMAGE_EVERY=<seconds>: <file>.<n> every so often (to find
   // variables by how they change).
+  // (Read once: getenv on every call -thousands per frame- was 30 % of the
+  // game thread, in strchr.)
   static bool image_dumped = false;
   static auto last_dump = std::chrono::steady_clock::now();
   static int dump_index = 0;
-  if (const char* path = std::getenv("NFSMW_DUMP_IMAGE")) {
-    const char* every = std::getenv("NFSMW_DUMP_IMAGE_EVERY");
+  static const char* const dump_path = std::getenv("NFSMW_DUMP_IMAGE");
+  static const char* const dump_every = std::getenv("NFSMW_DUMP_IMAGE_EVERY");
+  if (const char* path = dump_path) {
+    const char* every = dump_every;
     const auto now = std::chrono::steady_clock::now();
     if (!image_dumped ||
         (every && now - last_dump > std::chrono::milliseconds(int(std::atof(every) * 1000)))) {

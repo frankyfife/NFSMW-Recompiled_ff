@@ -83,12 +83,14 @@ class LauncherWindow final : public QMainWindow {
   QSpinBox* customFps_ = nullptr;
   QLabel* fpsNote_ = nullptr;
   ToggleSwitch* vsync_ = nullptr;
+  QLabel* vsyncNote_ = nullptr;
 
   Segmented* aniso_ = nullptr;
   Segmented* filter_ = nullptr;
   QSlider* sharpness_ = nullptr;
   QLabel* sharpnessValue_ = nullptr;
   Segmented* msaa_ = nullptr;
+  Segmented* mipmaps_ = nullptr;
   ToggleSwitch* postProcessing_ = nullptr;
   QSlider* fov_ = nullptr;
   QLabel* fovValue_ = nullptr;

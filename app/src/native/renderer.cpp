@@ -308,6 +308,9 @@ struct Renderer::HostTexture {
   // a sampled hash of it, compared once per frame.
   uint32_t check_address = 0, check_size = 0;
   uint64_t check_hash = 0, checked_frame = 0;
+  // A changed memory content seen at the last check, not taken yet: only once
+  // the same content is seen at a later frame (see GetTexture).
+  uint64_t changed_hash = 0;
   // Drawn at the renderer's scale (resolve destinations): shaders get their
   // unnormalized coordinates and sizes scaled.
   bool scaled = false;
@@ -1118,15 +1121,30 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
     if (!texture || !live_ || texture->checked_frame == frame_) {
       return texture;
     }
-    // The game may have streamed another texture into this memory.
+    // The game may have streamed another texture into this memory. The
+    // renderer draws a frame or two after the game recorded it, so a change
+    // can also be the game already writing the next texture into memory it
+    // freed after this frame: loading it then gave a half-written texture for
+    // a frame (white or garbage flashes). So a change is only taken once the
+    // same content is seen again at a later frame; until then the texture as
+    // it was (right for the frame being drawn in the freed-memory case, one
+    // frame late in the other).
     texture->checked_frame = frame_;
-    if (SampledHash(guest_memory_, texture->check_address, texture->check_size) ==
-        texture->check_hash) {
+    const uint64_t hash =
+        SampledHash(guest_memory_, texture->check_address, texture->check_size);
+    if (hash == texture->check_hash) {
+      texture->changed_hash = 0;
+      return texture;
+    }
+    if (hash != texture->changed_hash) {
+      texture->changed_hash = hash;
+      ++stats_.textures_changes_deferred;
       return texture;
     }
     release_after_flush_.push_back(texture->resource);
     guest_textures_.erase(it);
     ++stats_.textures_reloaded;
+    ++stats_.textures_reloaded_total;
   }
   const auto start = std::chrono::steady_clock::now();
   HostTexture* texture = LoadGuestTexture(masked);
@@ -1696,6 +1714,13 @@ void Renderer::Draw(const DrawCall& d) {
       s.MipLODBias = float(fetch.lod_bias) * (1.0f / 32.0f);
       s.MinLOD = float(fetch.mip_min_level);
       s.MaxLOD = mip == xenos::TextureFilter::kBaseMap ? 0.0f : float(fetch.mip_max_level);
+      // Mipmap setting: 1 one level sharper, 2 only the largest level (no
+      // mipmaps: sharpest, but distant surfaces shimmer).
+      if (mip_mode_ == 1) {
+        s.MipLODBias -= 1.0f;
+      } else if (mip_mode_ == 2) {
+        s.MaxLOD = s.MinLOD;
+      }
       s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
       if (fetch.border_color == xenos::BorderColor::k_ABGR_White) {
         s.BorderColor[0] = s.BorderColor[1] = s.BorderColor[2] = s.BorderColor[3] = 1.0f;

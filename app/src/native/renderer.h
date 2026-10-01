@@ -79,7 +79,10 @@ struct RendererStats {
   double translate_ms = 0, pipeline_ms = 0;  // shader translation, pipeline creation
   uint32_t translations = 0;
   uint32_t draws_waiting_for_pipelines = 0;
-  uint32_t msaa_samples = 0;  // the MSAA setting's samples (0: the game's)
+  uint32_t msaa_samples = 0;
+  // Since the start (not reset per frame): texture memory changes seen and
+  // not taken yet (see GetTexture), textures loaded again after a change.
+  uint64_t textures_changes_deferred = 0, textures_reloaded_total = 0;  // the MSAA setting's samples (0: the game's)
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
   uint32_t texture_tables_reused = 0;
   uint32_t index_ranges_reused = 0;
@@ -106,6 +109,9 @@ class Renderer {
   // game's, 0 none, 1 two, 2 four, 3 eight (fewer if the GPU cannot).
   // Before the first frame.
   void SetMsaaOverride(int32_t value) { msaa_override_ = value; }
+  // Texture mipmaps: 0 the game's, 1 one level sharper, 2 off (largest
+  // level only). Any time (samplers are keyed by their description).
+  void SetMipMode(int32_t value) { mip_mode_ = value; }
   // Pipelines created by this many background threads (0: when first needed,
   // on the calling thread); draws are skipped until theirs is ready.
   void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
@@ -177,6 +183,8 @@ class Renderer {
     stats_.translate_ms = kept.translate_ms;
     stats_.pipeline_ms = kept.pipeline_ms;
     stats_.translations = kept.translations;
+    stats_.textures_changes_deferred = kept.textures_changes_deferred;
+    stats_.textures_reloaded_total = kept.textures_reloaded_total;
   }
   // Guest memory as the renderer sees it (for texture loading on the CPU).
   void SetGuestMemory(const uint8_t* memory) { guest_memory_ = memory; }
@@ -274,6 +282,7 @@ class Renderer {
   bool pipeline_workers_stop_ = false;
   int32_t anisotropic_override_ = -1;
   int32_t msaa_override_ = -1;
+  int32_t mip_mode_ = 0;
   uint32_t msaa_supported_ = 0;  // highest count all formats support, 0: not asked yet
   uint32_t HostSamples(uint32_t guest_msaa);
   rex::graphics::DxbcShaderTranslator translator_;

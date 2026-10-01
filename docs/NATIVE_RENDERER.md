@@ -548,6 +548,55 @@ samples, are converted back per query slot (guest samples / host samples of
 the draws in it). Compared at render scale 1: off shows stair steps on the
 car's roof, 8x is smoother than the game's 4x.
 
+**Tearing at 120 fps (2026-10-01):** played with a custom target of 120
+fps on a 120 Hz VRR display and V-Sync off. Measured with the frame time
+recorder (DXGI frame statistics, 2160p, render scale 2, free roam driving):
+
+| 120 Hz display | presents sooner than a refresh | shown intervals | repeated frames | frame start → present |
+|---|---|---|---|---|
+| 120 fps, V-Sync off | 23.4 % (each one tears) | 8.33 ms median | 0 | 11.9 ms |
+| 116 fps, V-Sync off | 5.9 % | 8.63 ms median (VRR follows) | — | 12.1 ms |
+| 120 fps, V-Sync on, lock never | — | 8.17–8.51 ms | 0 | 11.8 ms |
+| 120 fps, V-Sync on, lock with V-Sync | — | 8.18–8.49 ms | 0 | 11.8 ms |
+
+V-Sync costs nothing measurable here, so the launcher now has it on by
+default (new settings key, so it comes on once for everyone). Without it
+every present that comes before the refresh ends tears; at a target equal
+to the refresh rate that is a quarter of them.
+
+**Half-loaded textures (white flashes):** the renderer checks the memory
+of each guest texture once per frame (sampled hash) and loaded it again when
+it changed. It draws a frame or two after the game recorded it, so a change
+can also be the game already streaming the next texture into memory it
+freed after that frame: the texture was loaded half written and showed for a
+frame. A change is now only taken when the same new content is seen at a
+later frame; until then the texture as it was. Counted in the log ("texture
+memory in 10 s"); in free roam a few per 10 s, all taken a frame later.
+
+**Mipmaps (`native_renderer_mipmaps`):** 1 lowers the LOD bias of every
+sampler by one level, 2 clamps the maximum LOD to the minimum (only the
+largest level). Samplers are cached by their description, so it applies
+live.
+
+**Game thread spent 30 % in `strchr` (fixed):** the hook of the library's
+shader-load writer (`sub_825A3AF0`, thousands of calls per frame) asked
+`getenv("NFSMW_DUMP_IMAGE")` every time. Read once now: `strchr` went from
+30.7 % of the game thread's samples to 0.08 %. The frame rate without limit
+stays at 280–286 (the renderer thread's 3.2 ms per frame sets it); the menus
+run at about 650 fps.
+
+**Draw distance (investigated, not changeable this way):** the player's
+camera has its clip distances at +188 / +192 (near 0.5, far 10000; set by
+`sub_82160C90` / `sub_82160C98`, a 10° shadow camera has 1650 / 2250), so the
+far plane limits nothing. Scaling every float the code reads from a fixed
+address (470 distance-like values from 20 to 20000, 92 squared-distance-like
+ones up to 10^9) by 4 and by 1/4 in photo mode, one at a time, and counting
+the recorded draws: none brought more draws than the scaling's noise, only
+fewer (shadow camera, wheel suspension, exposure). What is drawn comes from
+the track streamer's loaded sections and the precomputed visible sections
+(`TrackStreamer`, `VisibleSectionManager`), data of the track, not a
+distance in the code.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,

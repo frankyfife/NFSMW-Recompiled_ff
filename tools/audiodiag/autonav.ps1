@@ -1,8 +1,8 @@
-﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60)
+﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p')
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
-# I = Back + Start, O / A = D-pad down / up,
+# F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
 # G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -46,7 +46,7 @@ $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }
 $log = "$env:TEMP\claude\nav_$Name.log"
 $a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', "--fullscreen=$(-not $Windowed)".ToLower(),
-       '--resolution', '720p', '--guest_vblank_rate=1000', "--frame_pacing_fps=$Fps",
+       '--resolution', $Resolution, '--guest_vblank_rate=1000', "--frame_pacing_fps=$Fps",
        '--readback_resolve=fast', '--mnk_mode=true', '--log_guest_fps=true', '--audio_mute=true',
        "--audio_dump_file=$dump", '--log_file', $log) + $Extra
 $p = Start-Process "$b\nfsmw.exe" -ArgumentList $a -WorkingDirectory $b -PassThru
@@ -68,6 +68,14 @@ function Shot {
 }
 $t0 = Get-Date
 foreach ($step in $Keys.Split(',')) {
+  if ($step.Trim() -eq 'F10') {
+    # F10: frame time recording on/off.
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [G4]::keybd_event(0x79, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 80
+    [G4]::keybd_event(0x79, 0, 2, [UIntPtr]::Zero); Start-Sleep -Milliseconds 500
+    continue
+  }
   $m = [regex]::Match($step.Trim(), '^([A-Z])\*?(\d*)@?(\d*)$')
   $k = $m.Groups[1].Value; $n = if ($m.Groups[2].Value) { [int]$m.Groups[2].Value } else { 1 }
   $gap = if ($m.Groups[3].Value) { [int]$m.Groups[3].Value } else { 1800 }
