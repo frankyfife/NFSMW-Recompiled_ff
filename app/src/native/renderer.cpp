@@ -2342,8 +2342,15 @@ void Renderer::SyncGuestRange(uint32_t address, uint32_t size) {
     page_synced_frame_[page] = frame_;
     const uint32_t at = page * kLivePage;
     bool changed = false;
-    if (!CompareAndCopy(live_copy_.get() + at, guest_memory_ + at, kLivePage, &changed) ||
-        !changed) {
+    if (!CompareAndCopy(live_copy_.get() + at, guest_memory_ + at, kLivePage, &changed)) {
+      flush();
+      continue;
+    }
+    // Read without a fault: readable this frame (Readable, called right after
+    // for the same indices, then needs no probe of its own; the probes were
+    // 15 % of the renderer thread).
+    page_readable_frame_[page] = frame_;
+    if (!changed) {
       flush();
       continue;
     }

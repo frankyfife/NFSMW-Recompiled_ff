@@ -159,8 +159,24 @@ int wmain(int argc, wchar_t** argv) {
     return module == "VCRUNTIME140" || module == "ntdll" || module == "KERNELBASE" ||
            module == "ucrtbase" || module == "MSVCP140" || module == "KERNEL32";
   };
+  // Self time by source line (the leaf's file:line, nfsmw only): where in a
+  // big function the time goes.
+  std::map<std::string, uint64_t> by_line;
+  auto line_of = [&](DWORD64 addr) -> std::string {
+    IMAGEHLP_LINE64 line = {sizeof(line)};
+    DWORD disp = 0;
+    if (!SymGetLineFromAddr64(process, addr, &disp, &line)) return {};
+    std::string file = line.FileName ? line.FileName : "?";
+    const size_t slash = file.find_last_of("\/");
+    if (slash != std::string::npos) file = file.substr(slash + 1);
+    return file + ":" + std::to_string(line.LineNumber);
+  };
   for (const auto& [frames_key, n] : stacks) {
     const auto& leaf = name_of(frames_key[0]);
+    if (leaf.first == "nfsmw") {
+      const std::string l = line_of(frames_key[0]);
+      if (!l.empty() && l.rfind("nfsmw_recomp", 0) != 0) by_line[l + "  " + leaf.second] += n;
+    }
     by_func[leaf.second] += n;
     by_module[leaf.first] += n;
     std::vector<std::string> seen;
@@ -202,6 +218,7 @@ int wmain(int argc, wchar_t** argv) {
     }
   };
   table("by function (self time)", by_func, 80);
+  table("by source line (self time, nfsmw outside the generated code)", by_line, 60);
   table("runtime/system leaves by first caller outside the runtime", leaf_callers, 60);
   table("by function (including callees, stack walked up to 8 frames)", inclusive, 80);
   if (out != stdout) fclose(out);

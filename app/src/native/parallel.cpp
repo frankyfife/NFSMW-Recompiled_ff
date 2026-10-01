@@ -200,9 +200,18 @@ struct Frame {
   }
 };
 
+// Microcode hash (identity within a run). Eight bytes per step: the byte
+// FNV went over every shader of every frame on the game thread.
 uint64_t Hash(const uint8_t* p, size_t n) {
-  uint64_t h = 1469598103934665603ull;
-  for (size_t i = 0; i < n; ++i) {
+  uint64_t h = 1469598103934665603ull ^ (n * 0x9E3779B97F4A7C15ull);
+  size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    uint64_t w;
+    std::memcpy(&w, p + i, 8);
+    h = (h ^ w) * 0x100000001B3ull;
+    h ^= h >> 32;
+  }
+  for (; i < n; ++i) {
     h = (h ^ p[i]) * 1099511628211ull;
   }
   return h;
