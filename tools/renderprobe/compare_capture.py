@@ -29,8 +29,15 @@ names = [e[0] for e in layer["entries"]]
 def read_game(path):
     raw = open(path, "rb").read()
     off = 0
-    events, draws = [], []
+    events, draws, objects = [], [], {}
     while off < len(raw):
+        magic = struct.unpack_from("<I", raw, off)[0]
+        if magic == 0x204A424F:  # 'OBJ '
+            _, seq, kind, address, size = struct.unpack_from("<5I", raw, off)
+            off += 20
+            objects[address] = {"kind": kind, "seq": seq, "bytes": raw[off:off + size]}
+            off += size
+            continue
         magic, seq, entry, *args = struct.unpack_from("<9I", raw, off)
         off += 36
         rec = {"seq": seq, "name": names[entry], "args": args}
@@ -39,19 +46,25 @@ def read_game(path):
             off += 4
             rec["regs"] = np.frombuffer(raw, "<u4", n, off)
             off += 4 * n
+            (m,) = struct.unpack_from("<I", raw, off)
+            rec["objects"] = struct.unpack_from(f"<{m}I", raw, off + 4)
+            off += 4 + 4 * m
             draws.append(rec)
         events.append(rec)
+    read_game.objects = objects
     return events, draws
 
 
 def read_cp(path):
     raw = open(path, "rb").read()
-    rec_size = 40 + 4 * NREG
+    rec_size = 68 + 4 * NREG
     draws = []
     for off in range(0, len(raw) - rec_size + 1, rec_size):
-        h = struct.unpack_from("<10I", raw, off)
+        h = struct.unpack_from("<17I", raw, off)
         draws.append({"seq": h[1], "prim": h[2], "count": h[3], "src": h[4], "indexed": h[5],
-                      "dma": h[6], "killed": h[7], "regs": np.frombuffer(raw, "<u4", NREG, off + 40)})
+                      "dma": h[6], "killed": h[7],
+                      "vs": (h[8], h[9], h[10] | (h[11] << 32)), "ps": (h[12], h[13], h[14] | (h[15] << 32)),
+                      "regs": np.frombuffer(raw, "<u4", NREG, off + 68)})
     return draws
 
 

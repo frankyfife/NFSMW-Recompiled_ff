@@ -186,6 +186,42 @@ inclusive):
   renderer draws each scene once and replaces the per-tile resolves with one
   resolve each.
 
+## Stage 2 result: the resources of a frame (2026-10-01)
+
+**Setup:** the capture now has the following additions.
+- **Game side, per draw:** the device's current objects (vertex shader +12948,
+  pixel shader +12944, vertex declaration +11408, index buffer +12532). When
+  an object first appears in the frame, 1 KB of it is saved.
+- **GPU side, per draw:** address, length and hash of the active vertex and
+  pixel shader microcode (from IM_LOAD).
+- **Evaluation:** `tools/renderprobe/stage2_inventory.py` and
+  `shader_objects.py`.
+
+**Frame 6500 while driving:**
+
+| Resource | Finding |
+|---|---|
+| Vertex shaders | 28 objects ↔ 30 microcode programs (one object has 2; probably a VS variant per PS pairing). Microcode: **object +40**, virtual address in the 0xE range, physical = `(value & 0x1FFFFFFF) + 0x1000`. |
+| Pixel shaders | 26 objects ↔ 25 programs. Microcode: **object +12**, size in bytes at +60. |
+| Index buffers | 300 objects. DMA address = **data address at object +12** + start × index size (2502 of 2516 draws; the rest use a different index size or offset, still open). |
+| Textures | 341 distinct in the frame, 333 of them tiled. Formats: DXT1 225, DXT4_5 59, DXT2_3 41, 8_8_8_8 13, 24_8 3. Mostly 256², 128², 256×2048. |
+| Vertex buffers | 1375 distinct ranges (vertex fetch constants: address and size in dwords). |
+| Render passes | 4 configurations (RB_SURFACE_INFO/COLOR_INFO/DEPTH_INFO): **main scene 1258 draws, pitch 1280, 4× MSAA** (3 tiles, since 1280×720×4×8 bytes ≈ 29 MB > 10 MB EDRAM); 759 draws pitch 1600 without MSAA; 307 draws pitch 640; 309 draws pitch 280 with 4× MSAA. |
+| Resolves | 25 per frame (`sub_82592538`, flags in r4: 0x300, 0x14, 0x4 …); `sub_825991C0` (tile mask) 8×, `sub_82597840` (replay command buffer) 3×. |
+
+**What this means for an own renderer:**
+- Shaders: microcode address from the device object; the existing translator
+  in the SDK turns it into DXBC.
+- Textures: base address, format and size are in the fetch constants;
+  untiling exists in the SDK.
+- Render targets: four fixed setups per frame. The main scene needs 4× MSAA,
+  natively and without tiles.
+- Still open for stage 3:
+  - Meaning of the resolve flags and destinations: resolve → which texture
+    address.
+  - Clear (`sub_8259A500`?).
+  - The 14 index-buffer exceptions.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,

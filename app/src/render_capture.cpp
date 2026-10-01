@@ -12,13 +12,20 @@
 //
 // Record: u32 magic ('EVNT' or 'DRAW'), u32 sequence, u32 entry, u32 args[6]
 // (r3..r8 at the call), and for DRAW u32 count + count register values in the
-// order of kShadowGroups. All host little-endian.
+// order of kShadowGroups, then u32 4 + the device's current vertex shader,
+// pixel shader, vertex declaration and index buffer objects (+12948, +12944,
+// +11408, +12532). The first time an object shows up in the frame, an 'OBJ '
+// record follows: u32 magic, u32 sequence, u32 kind (0 VS, 1 PS, 2 decl, 3 IB),
+// u32 guest address, u32 size, then size raw (big-endian) bytes of it.
+// All host little-endian.
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -46,6 +53,10 @@ constexpr uint32_t kShadowRegisterCount = 16 + 21 + 5 + 12 + 21 + 38 + 8 + 1024 
 
 constexpr uint32_t kMagicEvent = 0x544E5645;  // 'EVNT'
 constexpr uint32_t kMagicDraw = 0x57415244;   // 'DRAW'
+constexpr uint32_t kMagicObject = 0x204A424F;  // 'OBJ '
+// Device fields with the current objects, and how much of each to dump.
+constexpr uint32_t kObjectFields[4] = {12948, 12944, 11408, 12532};
+constexpr uint32_t kObjectDumpBytes = 1024;
 
 // Draw entry points (docs/NATIVE_RENDERER.md).
 bool IsDrawEntry(const char* name) {
@@ -58,6 +69,7 @@ std::mutex g_mutex;
 FILE* g_file = nullptr;
 uint32_t g_sequence = 0;
 uint64_t g_file_frame = 0;
+std::vector<uint32_t> g_dumped_objects;
 
 inline uint32_t LoadBE32(const uint8_t* p) {
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
@@ -78,6 +90,7 @@ void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint8_
     g_file = std::fopen(path.c_str(), "wb");
     g_file_frame = frame;
     g_sequence = 0;
+    g_dumped_objects.clear();
     REXLOG_INFO("[render capture] game side: writing frame {} to {}", frame, path);
     if (!g_file) {
       return;
@@ -98,6 +111,22 @@ void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint8_
     }
     std::fwrite(&n, sizeof(n), 1, g_file);
     std::fwrite(values, sizeof(uint32_t), n, g_file);
+    uint32_t objects[5] = {4};
+    for (uint32_t i = 0; i < 4; ++i) {
+      objects[1 + i] = LoadBE32(device + kObjectFields[i]);
+    }
+    std::fwrite(objects, sizeof(objects), 1, g_file);
+    for (uint32_t i = 0; i < 4; ++i) {
+      const uint32_t address = objects[1 + i];
+      if (!address || std::find(g_dumped_objects.begin(), g_dumped_objects.end(), address) !=
+                          g_dumped_objects.end()) {
+        continue;
+      }
+      g_dumped_objects.push_back(address);
+      const uint32_t header_obj[5] = {kMagicObject, g_sequence - 1, i, address, kObjectDumpBytes};
+      std::fwrite(header_obj, sizeof(header_obj), 1, g_file);
+      std::fwrite(base + address, 1, kObjectDumpBytes, g_file);
+    }
   }
 }
 
