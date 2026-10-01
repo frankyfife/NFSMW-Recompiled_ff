@@ -181,6 +181,10 @@ struct Frame {
   std::unordered_map<uint32_t, uint64_t> code_hashes;
   uint32_t front_buffer = 0;
   uint64_t serial = 0;  // the game's swap count when the frame was complete
+  // The last patched shader copy (AddCodeCopy).
+  bool last_copy_valid = false;
+  uint32_t last_copy_address = 0, last_copy_offset = 0;
+  uint64_t last_copy_hash = 0;
   void Clear() {
     // Keep the allocations from frame to frame (about 3000 draws).
     if (registers.capacity() < (1u << 20)) {
@@ -197,6 +201,7 @@ struct Frame {
     code_by_address.clear();
     code_hashes.clear();
     front_buffer = 0;
+    last_copy_valid = false;
   }
 };
 
@@ -268,6 +273,7 @@ class Parallel {
   uint32_t AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out,
                    bool may_change);
   uint32_t AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
+  uint32_t AddCodeCopyLookup(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
 
   std::mutex mutex_;  // guards recording_ (game threads)
   // The shadow as last recorded (big-endian); invalid at the start of a frame,
@@ -365,6 +371,22 @@ void Parallel::Before(int entry, const uint32_t* args, uint8_t* base) {
 
 uint32_t Parallel::AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address,
                                uint64_t hash) {
+  // Consecutive draws mostly use the same patched shader: the last one is
+  // kept (the ordered map lookup was 1.7 % of the game thread).
+  Frame& f = *recording_;
+  if (f.last_copy_valid && f.last_copy_address == address && f.last_copy_hash == hash) {
+    return f.last_copy_offset;
+  }
+  const uint32_t offset_found = AddCodeCopyLookup(code, address, hash);
+  f.last_copy_valid = true;
+  f.last_copy_address = address;
+  f.last_copy_hash = hash;
+  f.last_copy_offset = offset_found;
+  return offset_found;
+}
+
+uint32_t Parallel::AddCodeCopyLookup(const std::vector<uint8_t>& code, uint32_t address,
+                                     uint64_t hash) {
   auto key = std::make_pair(address, hash);
   auto it = recording_->code_offsets.find(key);
   if (it != recording_->code_offsets.end()) {
