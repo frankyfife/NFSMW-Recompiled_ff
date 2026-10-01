@@ -50,6 +50,8 @@ FICHEROS = [
     "src/audio/xma_decoder.cpp",
     "src/graphics/pipeline/shader/translator_disasm.cpp",
     "src/ui/window_sdl.cpp",
+    "src/audio/xma_context.cpp",
+    "include/rex/audio/xma/context.h",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 

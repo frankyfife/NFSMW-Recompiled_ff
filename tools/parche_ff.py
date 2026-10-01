@@ -74,6 +74,14 @@ src/graphics/d3d12/command_processor.cpp
 src/graphics/pipeline/shader/translator_disasm.cpp
     El desensamblado de un vertex fetch con un formato sin nombre lo escribe
     como numero: fmt lanza una excepcion con un puntero de texto nulo.
+src/audio/xma_context.cpp, include/rex/audio/xma/context.h
+    El buffer de salida de un stream nuevo (primera pasada tras el clear del
+    contexto) empieza en silencio. NFS Most Wanted reutiliza sus 256 contextos
+    en rueda y lanza un sonido antes de darle buffers de entrada: esa pasada
+    no escribe nada e invalida la salida (el juego lo necesita), y el juego
+    lee bloques que el decodificador aun no ha escrito. La primera vez son
+    ceros; tras dar la vuelta eran el sonido anterior (motor) delante de los
+    clics del menu. MEDIDO: 20 de 20 clics limpios, 45 ms, con la rueda dada.
 src/ui/window_sdl.cpp
     Una ventana que no cabe en la pantalla (1920x1080 logicos al 225 % son
     4320x2430 pixeles en una de 3840x2160) se abre a lo sumo al 90 % del area
@@ -714,6 +722,18 @@ BLOQUES = [
      'ui/window_sdl.cpp #1',
      '  int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));\n#endif\n',
      '  int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));\n  // PARCHE LOCAL - a window larger than the screen: 1920x1080 logical at\n  // 225 % is 4320x2430 pixels on a 3840x2160 display, centered, so its edges\n  // (and the game\'s HUD) were cut off. Fit it into the usable area (with room\n  // for the frame), keeping the aspect ratio.\n  {\n    SDL_DisplayID display = SDL_GetPrimaryDisplay();\n    if (int32_t monitor_index = REXCVAR_GET(monitor); monitor_index > 0) {\n      int display_count = 0;\n      if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count)) {\n        if (monitor_index <= display_count) {\n          display = displays[monitor_index - 1];\n        }\n        SDL_free(displays);\n      }\n    }\n    SDL_Rect usable = {};\n    if (display && SDL_GetDisplayUsableBounds(display, &usable) && usable.w > 0 &&\n        usable.h > 0) {\n      const int max_width = usable.w * 9 / 10;\n      const int max_height = usable.h * 9 / 10;\n      if (initial_width > max_width || initial_height > max_height) {\n        const double scale = std::min(double(max_width) / double(initial_width),\n                                      double(max_height) / double(initial_height));\n        REXLOG_INFO("Window: {}x{} does not fit the display ({}x{} usable), opening at {}x{}",\n                    initial_width, initial_height, usable.w, usable.h,\n                    int(initial_width * scale), int(initial_height * scale));\n        initial_width = int(initial_width * scale);\n        initial_height = int(initial_height * scale);\n      }\n    }\n  }\n#endif\n'),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #1',
+     '\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n',
+     "\n  // PARCHE LOCAL - a new stream starts on a silent output buffer. NFS Most\n  // Wanted reuses its 256 contexts round robin and kicks a new sound before\n  // its input buffers are set; that pass writes nothing and invalidates the\n  // buffer (the game needs that), and the game then reads blocks the decoder\n  // has not written yet. On a context's first use they are zero (a few ms of\n  // silence); on a reused one they still held the previous sound, an engine\n  // fragment of ~50 ms before menu clicks after driving.\n  if (!output_cleared_since_clear_ && data.output_buffer_ptr) {\n    output_cleared_since_clear_ = true;\n    if (uint8_t* output = memory()->TranslatePhysical(data.output_buffer_ptr)) {\n      std::memset(output, 0,\n                  std::min<size_t>(size_t(data.output_buffer_block_count) * kOutputBytesPerBlock,\n                                   kOutputMaxSizeBytes));\n    }\n  }\n\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n"),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #2',
+     '  current_frame_remaining_subframes_ = 0;\n  loop_frame_output_limit_ = 0;\n',
+     '  current_frame_remaining_subframes_ = 0;\n  output_cleared_since_clear_ = false;\n  loop_frame_output_limit_ = 0;\n'),
+    ('include/rex/audio/xma/context.h',
+     'xma/context.h #1',
+     '  bool carry_valid_ = false;\n  uint8_t pending_output_limit_ = 0;\n',
+     "  bool carry_valid_ = false;\n  // The new stream's output buffer was silenced since the context was\n  // cleared (see Work).\n  bool output_cleared_since_clear_ = false;\n  uint8_t pending_output_limit_ = 0;\n"),
 ]
 
 

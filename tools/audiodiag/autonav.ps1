@@ -1,7 +1,8 @@
 ﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60)
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
-# E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture).
+# E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
+# G(as held, count = seconds; V/T hold W/arrow up).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -69,6 +70,17 @@ foreach ($step in $Keys.Split(',')) {
   $k = $m.Groups[1].Value; $n = if ($m.Groups[2].Value) { [int]$m.Groups[2].Value } else { 1 }
   $gap = if ($m.Groups[3].Value) { [int]$m.Groups[3].Value } else { 1800 }
   if ($k -eq 'W') { Start-Sleep -Seconds $n; continue }
+  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26 }
+  if ($hold.ContainsKey($k)) {
+    # Held for n seconds: G = gas (right trigger, O key), V = W key (left
+    # stick up), T = arrow up.
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [G4]::keybd_event([byte]$hold[$k], 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Seconds $n
+    [G4]::keybd_event([byte]$hold[$k], 0, 2, [UIntPtr]::Zero)
+    continue
+  }
   if ($k -eq 'P') { Shot; continue }
   for ($i = 0; $i -lt $n; $i++) {
     [G4]::SetForegroundWindow($h) | Out-Null
