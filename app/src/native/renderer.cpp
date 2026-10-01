@@ -1,6 +1,9 @@
 ﻿#include "renderer.h"
 
 #include <algorithm>
+#include <atomic>
+#include <deque>
+#include <thread>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -310,6 +313,10 @@ struct Renderer::HostTexture {
 
 struct Renderer::Pipeline {
   ComPtr<ID3D12PipelineState> state;
+  // 0 being created (in the background), 1 ready, 2 failed.
+  std::atomic<int> status{0};
+  double compile_ms = 0;
+  bool counted = false;  // in the stats yet
 };
 
 Renderer::Renderer(uint32_t scale)
@@ -318,6 +325,14 @@ Renderer::Renderer(uint32_t scale)
                   std::clamp<uint32_t>(scale, 1, 4), std::clamp<uint32_t>(scale, 1, 4)) {}
 
 Renderer::~Renderer() {
+  {
+    std::lock_guard<std::mutex> lock(pipeline_jobs_mutex_);
+    pipeline_workers_stop_ = true;
+  }
+  pipeline_jobs_cv_.notify_all();
+  for (std::thread& worker : pipeline_workers_) {
+    worker.join();
+  }
   if (fence_event_) {
     CloseHandle(fence_event_);
   }
@@ -1112,6 +1127,39 @@ UINT ComponentMapping(uint32_t swizzle, uint32_t host_swizzle) {
 
 }  // namespace
 
+void Renderer::CreatePipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc) {
+  const auto start = std::chrono::steady_clock::now();
+  const HRESULT created =
+      device_->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline.state));
+  pipeline.compile_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  pipeline.status.store(SUCCEEDED(created) ? 1 : 2, std::memory_order_release);
+}
+
+void Renderer::StartPipelineWorkers() {
+  if (!pipeline_workers_.empty()) {
+    return;
+  }
+  for (uint32_t i = 0; i < async_pipeline_threads_; ++i) {
+    pipeline_workers_.emplace_back([this]() {
+      for (;;) {
+        PipelineJob job;
+        {
+          std::unique_lock<std::mutex> lock(pipeline_jobs_mutex_);
+          pipeline_jobs_cv_.wait(
+              lock, [this]() { return pipeline_workers_stop_ || !pipeline_jobs_.empty(); });
+          if (pipeline_workers_stop_) {
+            return;
+          }
+          job = pipeline_jobs_.front();
+          pipeline_jobs_.pop_front();
+        }
+        CreatePipeline(*job.pipeline, job.desc);
+      }
+    });
+  }
+}
+
 void Renderer::Draw(const DrawCall& d) {
   using rex::graphics::RegisterFile;
   const RegisterFile& regs = *d.regs;
@@ -1209,13 +1257,21 @@ void Renderer::Draw(const DrawCall& d) {
   }
   auto* vertex_translation = vs->shader->GetOrCreateTranslation(vertex_mod.value);
   if (!vertex_translation->is_translated()) {
+    const auto start = std::chrono::steady_clock::now();
     translator_.TranslateAnalyzedShader(*vertex_translation);
+    stats_.translate_ms += std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - start).count();
+    ++stats_.translations;
   }
   rex::graphics::Shader::Translation* pixel_translation = nullptr;
   if (ps) {
     pixel_translation = ps->shader->GetOrCreateTranslation(pixel_mod.value);
     if (!pixel_translation->is_translated()) {
+      const auto start = std::chrono::steady_clock::now();
       translator_.TranslateAnalyzedShader(*pixel_translation);
+      stats_.translate_ms += std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - start).count();
+      ++stats_.translations;
     }
   }
   if (!vertex_translation->is_valid() || (pixel_translation && !pixel_translation->is_valid())) {
@@ -1376,14 +1432,35 @@ void Renderer::Draw(const DrawCall& d) {
     }
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     desc.SampleDesc.Count = key.samples;
-    if (FAILED(device_->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline->state)))) {
-      ++stats_.pipeline_failures;
+    if (async_pipeline_threads_) {
+      // In the background: a pipeline the driver has not compiled before took
+      // up to 350 ms, the whole renderer stood still meanwhile. The draws that
+      // need it are skipped until it is there (a few frames).
+      StartPipelineWorkers();
+      {
+        std::lock_guard<std::mutex> lock(pipeline_jobs_mutex_);
+        pipeline_jobs_.push_back({pipeline.get(), desc});
+      }
+      pipeline_jobs_cv_.notify_one();
     } else {
-      ++stats_.pipelines;
+      CreatePipeline(*pipeline, desc);
     }
   }
-  if (!pipeline->state) {
+  const int pipeline_status = pipeline->status.load(std::memory_order_acquire);
+  if (pipeline_status != 0 && !pipeline->counted) {
+    pipeline->counted = true;
+    stats_.pipeline_ms += pipeline->compile_ms;
+    if (pipeline_status == 1) {
+      ++stats_.pipelines;
+    } else {
+      ++stats_.pipeline_failures;
+    }
+  }
+  if (pipeline_status != 1) {
     ++stats_.draws_skipped;
+    if (pipeline_status == 0) {
+      ++stats_.draws_waiting_for_pipelines;
+    }
     return;
   }
 

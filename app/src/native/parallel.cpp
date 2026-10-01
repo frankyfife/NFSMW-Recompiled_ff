@@ -59,6 +59,9 @@ REXCVAR_DEFINE_BOOL(native_renderer_window, false, "Debug",
 REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
                      "With native_renderer: draw the frames at this multiple of 1280x720 "
                      "(1-4, supersampling)");
+REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
+                     "With native_renderer: background threads that create pipelines (0 = "
+                     "when first needed, the renderer waits)");
 REXCVAR_DEFINE_INT32(native_renderer_anisotropic, -1, "Debug",
                      "With native_renderer: anisotropic filtering forced on textures with "
                      "linear filtering and mips (0 off, 1-5 = 1x-16x; -1 = the game's)");
@@ -639,6 +642,8 @@ void Parallel::Thread() {
   const uint32_t scale = uint32_t(std::clamp(REXCVAR_GET(native_renderer_scale), 1, 4));
   replay::Renderer renderer(scale);
   renderer.SetAnisotropicOverride(REXCVAR_GET(native_renderer_anisotropic));
+  renderer.SetAsyncPipelineThreads(
+      uint32_t(std::clamp(REXCVAR_GET(native_renderer_pipeline_threads), 0, 8)));
   auto* kernel = rex::system::kernel_state();
   const uint8_t* physical = kernel->memory()->physical_membase();
   if (!renderer.Initialize()) {
@@ -704,6 +709,22 @@ void Parallel::Thread() {
       if (const uint64_t misaligned = walks_misaligned_.exchange(0)) {
         REXLOG_WARN("[native renderer] {} shader load scans did not end at the write pointer",
                     misaligned);
+      }
+      {
+        static double logged_translate = 0, logged_pipeline = 0;
+        static uint32_t logged_translations = 0, logged_pipelines = 0;
+        if (s.translations != logged_translations || s.pipelines != logged_pipelines) {
+          REXLOG_INFO("[native renderer] new in 10 s: {} shader translations ({:.0f} ms), {} "
+                      "pipelines ({:.0f} ms in the background); last frame {} draws waited "
+                      "for theirs",
+                      s.translations - logged_translations, s.translate_ms - logged_translate,
+                      s.pipelines - logged_pipelines, s.pipeline_ms - logged_pipeline,
+                      s.draws_waiting_for_pipelines);
+          logged_translate = s.translate_ms;
+          logged_pipeline = s.pipeline_ms;
+          logged_translations = s.translations;
+          logged_pipelines = s.pipelines;
+        }
       }
       if (verify_dirty_) {
         REXLOG_INFO("[native renderer] constant chunks changed outside the dirty masks: {}",

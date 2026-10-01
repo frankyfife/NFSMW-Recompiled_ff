@@ -13,12 +13,15 @@
 // out the way it expects (see D3D12CommandProcessor::UpdateBindings).
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
-#include <map>
+#include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -73,6 +76,9 @@ struct SharedFrame {
 
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
+  double translate_ms = 0, pipeline_ms = 0;  // shader translation, pipeline creation
+  uint32_t translations = 0;
+  uint32_t draws_waiting_for_pipelines = 0;
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
   uint32_t texture_tables_reused = 0;
   uint32_t index_ranges_reused = 0;
@@ -95,6 +101,9 @@ class Renderer {
   // Anisotropic filtering forced on textures with linear filtering and mips,
   // as xenos::AnisoFilter (0 off, 1-5 = 1x-16x); -1 leaves the game's.
   void SetAnisotropicOverride(int32_t value) { anisotropic_override_ = value; }
+  // Pipelines created by this many background threads (0: when first needed,
+  // on the calling thread); draws are skipped until theirs is ready.
+  void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
 
   bool Initialize();
   // Uploads the whole guest physical memory (512 MB).
@@ -160,6 +169,9 @@ class Renderer {
     stats_.pipelines = kept.pipelines;
     stats_.pipeline_failures = kept.pipeline_failures;
     stats_.shader_failures = kept.shader_failures;
+    stats_.translate_ms = kept.translate_ms;
+    stats_.pipeline_ms = kept.pipeline_ms;
+    stats_.translations = kept.translations;
   }
   // Guest memory as the renderer sees it (for texture loading on the CPU).
   void SetGuestMemory(const uint8_t* memory) { guest_memory_ = memory; }
@@ -191,6 +203,8 @@ class Renderer {
     sets_[set_].after_completion.push_back(std::move(work));
   }
   bool CreatePresentPipeline();
+  void CreatePipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
+  void StartPipelineWorkers();
   bool EnsureOcclusionQueries();
   void OcclusionBegin();
   void OcclusionEnd();
@@ -243,6 +257,16 @@ class Renderer {
   std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> texture_ranges_;
 
   uint32_t scale_ = 1;
+  uint32_t async_pipeline_threads_ = 0;
+  struct PipelineJob {
+    Pipeline* pipeline = nullptr;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+  };
+  std::mutex pipeline_jobs_mutex_;
+  std::condition_variable pipeline_jobs_cv_;
+  std::deque<PipelineJob> pipeline_jobs_;
+  std::vector<std::thread> pipeline_workers_;
+  bool pipeline_workers_stop_ = false;
   int32_t anisotropic_override_ = -1;
   rex::graphics::DxbcShaderTranslator translator_;
   rex::string::StringBuffer disasm_;

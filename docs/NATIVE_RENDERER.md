@@ -441,6 +441,16 @@ swap packet's 1280x720 cropped it to the top-left quarter). Measured: 2x
 (2560x1440) and 4x (5120x2880) in free roam, 60 fps, renderer thread
 3.5-4.1 ms per frame, visibly sharper with smoother edges.
 
+**Pipelines in the background (2026-10-01):** a pipeline the NVIDIA driver
+has not compiled before took up to 288-355 ms, and the renderer stood still
+meanwhile (most take under 0.5 ms from the driver's cache). Pipelines are
+now created by three background threads (`--native_renderer_pipeline_threads`,
+0 = on the renderer thread as before); draws that need one are skipped until
+it is there. Measured in a free camera flight: the 288 ms pipeline compiled
+in the background, no draw had to wait at the 10 s samples, no renderer
+stalls. The log says per 10 s how many shader translations and pipelines
+were new and how long they took.
+
 **Rare unusable vertex shaders, fixed:** in some runs without frame limit
 2-7 vertex shaders a run could not be analyzed (the draw was skipped). Their
 microcode was one control flow triple followed by ordinary PM4 packets. When
