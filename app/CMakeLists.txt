@@ -14,12 +14,18 @@ include(generated/rexglue.cmake)
 set(NFSMW_SOURCES
     src/main.cpp
     src/nfsmw_menu.cpp
+    src/render_census.cpp
 )
 
 if(WIN32)
     add_executable(nfsmw WIN32 ${NFSMW_SOURCES})
 else()
     add_executable(nfsmw ${NFSMW_SOURCES})
+endif()
+
+# Public symbols (sub_XXXXXXXX) in a PDB for the sampling profiler, link only.
+if(WIN32)
+    target_link_options(nfsmw PRIVATE "LINKER:/DEBUG" "LINKER:/OPT:REF" "LINKER:/OPT:ICF")
 endif()
 
 # GPU_PLUGINS deja el DLL del backend grafico junto al .exe

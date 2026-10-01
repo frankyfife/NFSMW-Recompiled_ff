@@ -1,6 +1,7 @@
 // Sampling profiler for one thread of a running process (no admin rights).
 //
 //   sampler.exe <process.exe> <thread name substring> <seconds> [out.txt]
+//   sampler.exe <process.exe> ? 0        lists the thread names
 //
 // Suspends the thread about 2000 times per second, reads its instruction
 // pointer and resumes it. At the end the addresses are resolved to functions
@@ -55,7 +56,9 @@ static HANDLE FindThread(DWORD pid, const wchar_t* part) {
     if (!t) continue;
     PWSTR desc = nullptr;
     if (get_desc && SUCCEEDED(get_desc(t, &desc)) && desc) {
-      if (wcsstr(desc, part)) {
+      if (wcscmp(part, L"?") == 0) {
+        wprintf(L"  %lu: %s\n", te.th32ThreadID, desc);
+      } else if (wcsstr(desc, part)) {
         wprintf(L"thread %lu: %s\n", te.th32ThreadID, desc);
         found = t;
       }
