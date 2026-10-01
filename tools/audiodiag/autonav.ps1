@@ -1,4 +1,4 @@
-﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep)
+﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed)
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture).
@@ -10,6 +10,7 @@ public static class G4 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   delegate bool EnumProc(IntPtr h, IntPtr p);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr p);
@@ -31,7 +32,9 @@ public static class G4 {
   public struct RECT { public int L, T, R, B; }
 }
 "@
-[G4]::SetProcessDPIAware() | Out-Null
+# Per-monitor aware: window rectangles and the screen copy in physical pixels
+# (with only system awareness a 225 % display gave a rectangle past the screen).
+if (-not [G4]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [G4]::SetProcessDPIAware() | Out-Null }
 # S = Space (A button), B = Backspace (B button), H/J/K/M = stick left/right/up/down (A/D/W/S keys)
 $vk = @{ 'E' = 0x0D; 'L' = 0x25; 'R' = 0x27; 'U' = 0x26; 'D' = 0x28; 'S' = 0x20; 'X' = 0x1B;
          'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53 }
@@ -39,7 +42,7 @@ $b = "D:\NFSMW\NFSMW-Recompiled_ff\build"
 $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }
 $log = "$env:TEMP\claude\nav_$Name.log"
-$a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', '--fullscreen=false',
+$a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', "--fullscreen=$(-not $Windowed)".ToLower(),
        '--resolution', '720p', '--guest_vblank_rate=1000', '--frame_pacing_fps=60',
        '--readback_resolve=fast', '--mnk_mode=true', '--log_guest_fps=true', '--audio_mute=true',
        "--audio_dump_file=$dump", '--log_file', $log) + $Extra

@@ -74,6 +74,11 @@ src/graphics/d3d12/command_processor.cpp
 src/graphics/pipeline/shader/translator_disasm.cpp
     El desensamblado de un vertex fetch con un formato sin nombre lo escribe
     como numero: fmt lanza una excepcion con un puntero de texto nulo.
+src/ui/window_sdl.cpp
+    Una ventana que no cabe en la pantalla (1920x1080 logicos al 225 % son
+    4320x2430 pixeles en una de 3840x2160) se abre a lo sumo al 90 % del area
+    util, con la misma proporcion. Antes quedaba centrada con los bordes (y el
+    HUD del juego) fuera de la pantalla: solo se veia el 89 % central.
 
     Tambien: cuando el procesador de comandos se queda esperando se entregan
     los informes pendientes esperando a la GPU, para que un guest que espera
@@ -705,6 +710,10 @@ BLOQUES = [
      'shader/translator_disasm.cpp #1',
      '  if (attributes.data_format != xenos::VertexFormat::kUndefined) {\n    out->AppendFormat(", DataFormat={}",\n                      kVertexFetchDataFormats[static_cast<int>(attributes.data_format)].name);\n  }\n',
      '  if (attributes.data_format != xenos::VertexFormat::kUndefined) {\n    // PARCHE LOCAL: formats without a name (not valid for vertex fetches)\n    // as their number; fmt throws on a null string.\n    const char* data_format_name =\n        kVertexFetchDataFormats[static_cast<int>(attributes.data_format)].name;\n    if (data_format_name) {\n      out->AppendFormat(", DataFormat={}", data_format_name);\n    } else {\n      out->AppendFormat(", DataFormat={}", static_cast<int>(attributes.data_format));\n    }\n  }\n'),
+    ('src/ui/window_sdl.cpp',
+     'ui/window_sdl.cpp #1',
+     '  int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));\n#endif\n',
+     '  int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));\n  // PARCHE LOCAL - a window larger than the screen: 1920x1080 logical at\n  // 225 % is 4320x2430 pixels on a 3840x2160 display, centered, so its edges\n  // (and the game\'s HUD) were cut off. Fit it into the usable area (with room\n  // for the frame), keeping the aspect ratio.\n  {\n    SDL_DisplayID display = SDL_GetPrimaryDisplay();\n    if (int32_t monitor_index = REXCVAR_GET(monitor); monitor_index > 0) {\n      int display_count = 0;\n      if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count)) {\n        if (monitor_index <= display_count) {\n          display = displays[monitor_index - 1];\n        }\n        SDL_free(displays);\n      }\n    }\n    SDL_Rect usable = {};\n    if (display && SDL_GetDisplayUsableBounds(display, &usable) && usable.w > 0 &&\n        usable.h > 0) {\n      const int max_width = usable.w * 9 / 10;\n      const int max_height = usable.h * 9 / 10;\n      if (initial_width > max_width || initial_height > max_height) {\n        const double scale = std::min(double(max_width) / double(initial_width),\n                                      double(max_height) / double(initial_height));\n        REXLOG_INFO("Window: {}x{} does not fit the display ({}x{} usable), opening at {}x{}",\n                    initial_width, initial_height, usable.w, usable.h,\n                    int(initial_width * scale), int(initial_height * scale));\n        initial_width = int(initial_width * scale);\n        initial_height = int(initial_height * scale);\n      }\n    }\n  }\n#endif\n'),
 ]
 
 

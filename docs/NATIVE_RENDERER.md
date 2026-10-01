@@ -281,7 +281,8 @@ Direct3D 12 renderer for a captured frame, ~2000 lines.
 
 **Result on frame 6500:** all ~2900 draws and 25 resolves in 3.5 s including
 the 512 MB upload (RTX 5090). Compared with the emulator's screenshot (which
-shows the front buffer cropped to 89 %, centered): **mean difference
+showed the front buffer cropped to 89 %, centered; a test window larger than
+the screen, see "HUD offset" below): **mean difference
 5.3/255 per channel, 1.8 % of the pixels differ by more than 32** (edges,
 texture filtering, clouds that moved between capture and screenshot). The
 car's ground shadow, the reflections, bloom and the color grading match.
@@ -315,9 +316,8 @@ at start in the audio thread. The SDK now falls back to a silent output
 **Next:**
 1. Remaining differences pixel by pixel (sampler details, gamma, MSAA sample
    positions), then frames from other places (menu, night, rain, race).
-2. The emulator shows only 89 % of the front buffer (centered), so the HUD
-   looks cut or shifted at the edges; the presenter's safe area option is
-   off, the cause is still open.
+2. The emulator showed only 89 % of the front buffer (centered), so the HUD
+   looked cut or shifted at the edges (solved, see "HUD offset" below).
 3. Then the step to the game: drive the renderer from the D3D hooks in the
    running game instead of from a file (first in parallel, showing its image
    in a second window), see "Switch over" below.
@@ -362,8 +362,8 @@ the SDK's `IssueSwap` (patch in `tools/parche_ff.py`) asks it for the latest
 frame, waits for the fence on its queue and uses that texture instead of the
 emulated front buffer, with the same gamma ramp and FXAA. Measured in free
 roam: 591 of 597 frames drawn natively in 10 s at 60 fps; the picture in the
-game's window matches. The 89 % crop shows there too, so it comes from the
-presenter, not from the emulated drawing.
+game's window matches. The 89 % crop showed there too (the test window was
+larger than the screen, see "HUD offset").
 
 **The emulation no longer draws (2026-10-01):** while the native renderer
 delivers frames (`NfsmwNativeSkipEmulation`, `native_renderer_skip_emulation`,
@@ -427,8 +427,19 @@ unpatched vertex shaders. Host crashes write a symbolized stack to
 - The renderer reads memory later than the draw happened: dynamic data the
   game rewrites in between can glitch.
 - Second graphics card: the renderer could run on the other adapter.
-- The presenter crops the native picture like the emulated one (89 %), so
-  the HUD sits a little off.
+
+**HUD offset (89 % crop), solved:** not the presenter. The test runs
+(`autonav.ps1`) started the game windowed, and the window opened at its
+desired size of 1920x1080 logical, which at 225 % display scaling is
+4320x2430 pixels on a 3840x2160 screen: centered, so the edges (title bar,
+minimap, speedometer) were off the screen; 3840/4320 = 0.889. Measured in
+fullscreen (the launcher's default): the screen is the front buffer 1:1
+(scale 1.0, offset 0, mean difference 4/255 against the native front buffer
+saved with `NATIVE_SAVE_FRONT=<png>`). SDK patch (`window_sdl.cpp`): a
+window that does not fit opens at up to 90 % of the display's usable area,
+same aspect ratio (here 3281x1846). `autonav.ps1` now runs fullscreen
+(`-Windowed` for the old behaviour) and takes its screenshots per-monitor
+DPI aware.
 
 ## Options
 

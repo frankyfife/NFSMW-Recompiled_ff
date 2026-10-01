@@ -49,6 +49,7 @@ FICHEROS = [
     "include/rex/audio/sdl/sdl_audio_driver.h",
     "src/audio/xma_decoder.cpp",
     "src/graphics/pipeline/shader/translator_disasm.cpp",
+    "src/ui/window_sdl.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 

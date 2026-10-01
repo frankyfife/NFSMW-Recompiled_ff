@@ -658,6 +658,13 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     d.pixel_shader_dwords = item.ps_dwords;
     renderer.Draw(d);
   }
+  // NATIVE_SAVE_FRONT=<png path>: the front buffer every 300 frames (diagnostics).
+  if (const char* save_path = std::getenv("NATIVE_SAVE_FRONT")) {
+    static uint32_t save_count = 0;
+    if (++save_count % 300 == 0) {
+      renderer.SaveResolved(frame.front_buffer, save_path, false);
+    }
+  }
   renderer.PresentToShared(frame.front_buffer);
   if (REXCVAR_GET(native_renderer_skip_emulation)) {
     renderer.WriteBackSmallResolves(guest_memory, 64 * 1024);
