@@ -441,6 +441,20 @@ swap packet's 1280x720 cropped it to the top-left quarter). Measured: 2x
 (2560x1440) and 4x (5120x2880) in free roam, 60 fps, renderer thread
 3.5-4.1 ms per frame, visibly sharper with smoother edges.
 
+**Every swap shows its own frame (2026-10-01):** with the emulation no
+longer drawing, the GPU thread reaches the game's swap a few ms before the
+renderer thread has finished that frame, and every swap showed the previous
+one (measured in free roam: 599 of 599 swaps one frame behind, about 17 ms
+more latency at 60 fps). `NfsmwNativeFrame` now waits (50 ms at most) until
+the renderer has submitted the frame of the newest swap; the swap waits for
+its fence on the GPU as before. Measured: 600 of 600 swaps show their own
+frame at 60 fps, frame times 16.0-17.7 ms (before 16.4-19.8); uncapped
+287-291 fps, every swap its own frame. The frame pacing options (pace in the
+game thread, low latency, adaptive, smoothing, display lock, one present
+per frame) all still apply: they act at the game's swap and in the
+presenter, and with this wait they cover the native frame too. The
+launcher's emulation-only "Break slow frames down by stage" is gone.
+
 **Pipelines in the background (2026-10-01):** a pipeline the NVIDIA driver
 has not compiled before took up to 288-355 ms, and the renderer stood still
 meanwhile (most take under 0.5 ms from the driver's cache). Pipelines are

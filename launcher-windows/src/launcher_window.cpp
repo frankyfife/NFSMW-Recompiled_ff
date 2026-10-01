@@ -480,14 +480,14 @@ QWidget* LauncherWindow::buildAdvanced() {
   latency->addWide(lowLatency_);
   addNote(latency, QStringLiteral(
                        "The game starts the next frame, and reads the controller, only once "
-                       "the previous one is out. Helps most at high frame rates in busy "
-                       "scenes."));
+                       "the previous one is drawn and on its way to the screen."));
   adaptivePacing_ = new ToggleSwitch(QStringLiteral("Adaptive pacing"));
   latency->addWide(adaptivePacing_);
   addNote(latency, QStringLiteral(
-                       "When a scene cannot hold the target (measured: 75-117 fps at a "
-                       "120 fps target in the city), pace at what it holds evenly instead of "
-                       "alternating fast and slow frames."));
+                       "When a scene cannot hold the target, pace at what it holds evenly "
+                       "instead of alternating fast and slow frames. The native renderer "
+                       "holds about 270 fps (210 at 4× render scale), so this only matters "
+                       "for higher targets."));
   connect(adaptivePacing_, &ToggleSwitch::toggled, this, onChange);
   smoothMs_ = spin(0, 16);
   auto* smoothRow = new QWidget;
@@ -525,17 +525,11 @@ QWidget* LauncherWindow::buildAdvanced() {
   logStats_ = new ToggleSwitch(QStringLiteral("Performance statistics in the log"));
   diagnostics->addWide(logStats_);
   addNote(diagnostics, QStringLiteral(
-                           "Every 10 s: fps, frame times, latency, texture cache and a line "
-                           "for every late frame. Costs next to nothing."));
-  logBreakdown_ = new ToggleSwitch(QStringLiteral("Break slow frames down by stage"));
-  diagnostics->addWide(logBreakdown_);
-  addNote(diagnostics, QStringLiteral(
-                           "Shaders, textures, render targets, GPU waits… Costs 2-3 ms per "
-                           "frame in busy scenes, so only for hunting a problem."));
+                           "Every 10 s: fps, frame times, latency, the native renderer's "
+                           "statistics and a line for every late frame. Costs next to nothing."));
   auto* reset = new QPushButton(QStringLiteral("Reset advanced settings"));
   diagnostics->addWide(reset);
   connect(logStats_, &ToggleSwitch::toggled, this, onChange);
-  connect(logBreakdown_, &ToggleSwitch::toggled, this, onChange);
   connect(reset, &QPushButton::clicked, this, &LauncherWindow::resetAdvanced);
   right->addWidget(diagnostics);
   right->addStretch();
@@ -551,7 +545,6 @@ void LauncherWindow::resetAdvanced() {
   displayLock_->setCurrentIndex(1);
   presentPerFrame_->setChecked(true);
   logStats_->setChecked(true);
-  logBreakdown_->setChecked(false);
   refresh();
 }
 
@@ -633,7 +626,6 @@ void LauncherWindow::loadSettings() {
   displayLock_->setCurrentIndex(std::clamp(s.value("advanced/display_lock", 1).toInt(), 0, 2));
   presentPerFrame_->setChecked(s.value("advanced/present_per_frame", true).toBool());
   logStats_->setChecked(s.value("advanced/log_stats", true).toBool());
-  logBreakdown_->setChecked(s.value("advanced/log_breakdown", false).toBool());
 }
 
 void LauncherWindow::saveSettings() const {
@@ -662,7 +654,6 @@ void LauncherWindow::saveSettings() const {
   s.setValue("advanced/display_lock", displayLock_->currentIndex());
   s.setValue("advanced/present_per_frame", presentPerFrame_->isChecked());
   s.setValue("advanced/log_stats", logStats_->isChecked());
-  s.setValue("advanced/log_breakdown", logBreakdown_->isChecked());
   s.sync();
 }
 
@@ -778,7 +769,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << QStringLiteral("--unlock_all=%1").arg(unlockAll_->isChecked() ? "true" : "false");
   // Every 10 s: frames the game really presents, latency, texture cache.
   a << flag("log_guest_fps", logStats_->isChecked());
-  a << flag("log_frame_breakdown", logBreakdown_->isChecked());
+  a << flag("log_frame_breakdown", false);
   // F10 in the game records frame times into this folder (one CSV each).
   a << opt("frame_times_dir", QDir::toNativeSeparators(QDir(logDir_).filePath("frametimes")));
   return a;

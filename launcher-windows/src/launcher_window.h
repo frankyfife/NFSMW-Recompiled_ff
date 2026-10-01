@@ -98,7 +98,6 @@ class LauncherWindow final : public QMainWindow {
   Segmented* displayLock_ = nullptr;
   ToggleSwitch* presentPerFrame_ = nullptr;
   ToggleSwitch* logStats_ = nullptr;
-  ToggleSwitch* logBreakdown_ = nullptr;
 
   QPushButton* play_ = nullptr;
   QLabel* status_ = nullptr;

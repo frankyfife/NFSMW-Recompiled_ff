@@ -174,6 +174,7 @@ struct Frame {
   // Hash of the microcode at each offset in `code`.
   std::unordered_map<uint32_t, uint64_t> code_hashes;
   uint32_t front_buffer = 0;
+  uint64_t serial = 0;  // the game's swap count when the frame was complete
   void Clear() {
     // Keep the allocations from frame to frame (about 3000 draws).
     if (registers.capacity() < (1u << 20)) {
@@ -284,6 +285,14 @@ class Parallel {
   std::thread thread_;
   std::atomic<bool> started_{false};
   std::atomic<uint64_t> frames_recorded_{0}, frames_dropped_{0}, frames_rendered_{0};
+ public:
+  // Swaps the game made, and the swap whose frame the shared output shows.
+  std::atomic<uint64_t> swap_serial_total_{0}, shown_serial_{0};
+  std::mutex shown_mutex_;
+  std::condition_variable shown_cv_;
+  // Swaps that showed an older frame than the game's newest (1, 2, 3+ behind).
+  std::atomic<uint64_t> late_swaps_[3] = {};
+ private:
 
  public:
   std::atomic<replay::Renderer*> renderer_{nullptr};
@@ -594,6 +603,7 @@ void Parallel::SwapDone() {
     last_shadow_valid_ = false;
   }
   ++frames_recorded_;
+  done->serial = ++swap_serial_total_;
   std::lock_guard<std::mutex> handoff(handoff_mutex_);
   if (pending_) {
     ++frames_dropped_;  // the thread has not taken the previous one yet
@@ -687,6 +697,11 @@ void Parallel::Thread() {
                        .count();
       ++rendered_since_log;
       ++frames_rendered_;
+      {
+        std::lock_guard<std::mutex> lock(shown_mutex_);
+        shown_serial_.store(frame->serial);
+      }
+      shown_cv_.notify_all();
       std::lock_guard<std::mutex> lock(handoff_mutex_);
       free_frames_.push_back(std::move(frame));
     }
@@ -724,6 +739,15 @@ void Parallel::Thread() {
           logged_pipeline = s.pipeline_ms;
           logged_translations = s.translations;
           logged_pipelines = s.pipelines;
+        }
+      }
+      {
+        const uint64_t late[3] = {late_swaps_[0].exchange(0), late_swaps_[1].exchange(0),
+                                  late_swaps_[2].exchange(0)};
+        if (late[0] || late[1] || late[2]) {
+          REXLOG_INFO("[native renderer] swaps that showed an older frame (1/2/3+ behind): {} {} "
+                      "{}",
+                      late[0], late[1], late[2]);
         }
       }
       if (verify_dirty_) {
@@ -904,9 +928,27 @@ extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* inf
     return false;
   }
   replay::Renderer* renderer = Parallel::Get().renderer_.load();
-  replay::SharedFrame frame;
-  if (!renderer || !renderer->GetSharedFrame(frame)) {
+  if (!renderer) {
     return false;
+  }
+  // The swap shows the frame the game just finished: the GPU thread reaches
+  // the swap a few ms before the renderer thread is done with that frame, and
+  // without waiting every swap showed the previous one (measured in free
+  // roam: 599 of 599). The renderer only needs to have submitted it (the swap
+  // waits for its fence on the GPU); 50 ms at most.
+  Parallel& p = Parallel::Get();
+  {
+    const uint64_t wanted = p.swap_serial_total_.load();
+    std::unique_lock<std::mutex> lock(p.shown_mutex_);
+    p.shown_cv_.wait_for(lock, std::chrono::milliseconds(50),
+                         [&]() { return p.shown_serial_.load() >= wanted; });
+  }
+  replay::SharedFrame frame;
+  if (!renderer->GetSharedFrame(frame)) {
+    return false;
+  }
+  if (const uint64_t lag = p.swap_serial_total_.load() - p.shown_serial_.load()) {
+    ++p.late_swaps_[std::min<uint64_t>(lag, 3) - 1];
   }
   info->texture = frame.texture;
   info->fence = frame.fence;
