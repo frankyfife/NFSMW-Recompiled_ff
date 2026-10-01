@@ -16,6 +16,7 @@ set(NFSMW_SOURCES
     src/nfsmw_menu.cpp
     src/render_census.cpp
     src/render_capture.cpp
+    src/crash_log.cpp
 )
 
 if(WIN32)

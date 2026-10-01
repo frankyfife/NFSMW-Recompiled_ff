@@ -86,6 +86,10 @@ enum : int {
 
 struct Item {
   bool resolve = false;
+  // Occlusion query event (ZPD): report addresses, one per predicated tile.
+  bool occlusion = false;
+  uint32_t reports[4] = {};
+  uint32_t report_count = 0;
   uint32_t registers = 0;  // offset of the shadow in Frame::registers
   // Draw.
   uint32_t primitive_type = 0, count = 0;
@@ -175,6 +179,7 @@ class Parallel {
   void Record(int entry, const uint32_t* args, uint32_t result, uint8_t* base);
   void SwapDone();
   void ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t before, uint32_t after);
+  void RecordOcclusion(const uint32_t* addresses, uint32_t count);
 
  private:
   void EnsureThread();
@@ -182,12 +187,20 @@ class Parallel {
   void Render(replay::Renderer& renderer, const Frame& frame);
   uint32_t AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out,
                    bool may_change);
+  uint32_t AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
 
   std::mutex mutex_;  // guards recording_ (game threads)
   std::unique_ptr<Frame> recording_ = std::make_unique<Frame>();
   // Last vertex shader IM_LOAD seen, and the device's vertex shader object
-  // at that time: only valid while that object is bound.
-  uint32_t scanned_vs_ = 0, scanned_vs_object_ = 0;
+  // at that time: only valid while that object is bound. The microcode is
+  // copied at the first draw after it (the library fills an inline copy in
+  // after writing the load) and kept: a shader is loaded once while it stays
+  // bound, and the command buffer is overwritten long before the object
+  // changes.
+  uint32_t scanned_vs_ = 0, scanned_vs_object_ = 0, scanned_vs_dwords_ = 0;
+  bool scanned_vs_copied_ = false;
+  std::vector<uint8_t> scanned_vs_code_;
+  uint64_t scanned_vs_hash_ = 0;
 
   std::mutex handoff_mutex_;
   std::condition_variable handoff_cv_;
@@ -231,6 +244,20 @@ uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& 
   if (!may_change) {
     recording_->code_by_address.emplace(address, std::make_pair(offset, dwords_out));
   }
+  return offset;
+}
+
+uint32_t Parallel::AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address,
+                               uint64_t hash) {
+  auto key = std::make_pair(address, hash);
+  auto it = recording_->code_offsets.find(key);
+  if (it != recording_->code_offsets.end()) {
+    return it->second;
+  }
+  const uint32_t offset = uint32_t(recording_->code.size());
+  recording_->code.insert(recording_->code.end(), code.begin(), code.end());
+  recording_->code_offsets.emplace(key, offset);
+  recording_->code_hashes.emplace(offset, hash);
   return offset;
 }
 
@@ -284,19 +311,28 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
     // memory), else the object's; the pixel shader object's.
     const uint32_t vs_object = LoadBE32(device + kDeviceVertexShader);
     const uint32_t ps_object = LoadBE32(device + kDevicePixelShader);
-    uint32_t vs_address = scanned_vs_object_ == vs_object ? scanned_vs_ : 0;
-    uint32_t vs_object_address = 0;
-    if (vs_object) {
-      vs_object_address = GuestToPhysical(LoadBE32(base + vs_object + 40));
+    if (scanned_vs_ && scanned_vs_object_ == vs_object && !scanned_vs_copied_) {
+      uint32_t dwords = scanned_vs_dwords_;
+      if (!dwords) {
+        dwords = MicrocodeLength(physical, scanned_vs_);
+      }
+      scanned_vs_code_.assign(physical + scanned_vs_,
+                              physical + scanned_vs_ + size_t(dwords) * 4);
+      scanned_vs_hash_ = Hash(scanned_vs_code_.data(), scanned_vs_code_.size());
+      scanned_vs_copied_ = true;
     }
-    if (!vs_address) {
-      vs_address = vs_object_address;
+    if (scanned_vs_ && scanned_vs_object_ == vs_object && !scanned_vs_code_.empty()) {
+      item.vs_code = AddCodeCopy(scanned_vs_code_, scanned_vs_, scanned_vs_hash_);
+      item.vs_dwords = uint32_t(scanned_vs_code_.size() / 4);
+    } else {
+      const uint32_t vs_address =
+          vs_object ? GuestToPhysical(LoadBE32(base + vs_object + 40)) : 0;
+      if (!vs_address) {
+        f.registers.resize(item.registers);
+        return;
+      }
+      item.vs_code = AddCode(physical, vs_address, item.vs_dwords, false);
     }
-    if (!vs_address) {
-      f.registers.resize(item.registers);
-      return;
-    }
-    item.vs_code = AddCode(physical, vs_address, item.vs_dwords, vs_address != vs_object_address);
     if (ps_object) {
       item.ps_code = AddCode(physical, GuestToPhysical(LoadBE32(base + ps_object + 12)),
                              item.ps_dwords, false);
@@ -331,6 +367,16 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
 void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t before,
                                   uint32_t after) {
   std::lock_guard<std::mutex> lock(mutex_);
+  // dwords 0: measured from the control flow at the copy.
+  auto keep = [&](uint32_t address, uint32_t dwords) {
+    if (uint64_t(address) + dwords * 4ull > 0x20000000) {
+      return;
+    }
+    scanned_vs_ = address;
+    scanned_vs_dwords_ = dwords;
+    scanned_vs_copied_ = false;
+    scanned_vs_object_ = LoadBE32(base + device + kDeviceVertexShader);
+  };
   const uint32_t vs_object = LoadBE32(base + device + kDeviceVertexShader);
   if (vs_object != scanned_vs_object_) {
     scanned_vs_ = 0;
@@ -338,29 +384,53 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
   if (after <= before || after - before > 0x10000) {
     return;
   }
-  for (uint32_t p = before + 4; p + 8 <= after; p += 4) {
+  // Packet by packet (what the function writes starts after the last dword
+  // written before): payloads like constants or vertex data would otherwise
+  // be taken for headers.
+  for (uint32_t p = before + 4, next; p + 8 <= after; p = next) {
     const uint32_t header = LoadBE32(base + p);
+    switch (header >> 30) {
+      case 0:  // registers: count values follow
+      case 3:  // count dwords follow
+        next = p + 4 * (((header >> 16) & 0x3FFF) + 2);
+        break;
+      case 1:  // two registers
+        next = p + 12;
+        break;
+      default:  // no-op
+        next = p + 4;
+        break;
+    }
+    if (header >> 30 != 3) {
+      continue;
+    }
     if (header == kIndirectLoad) {
       // IM_LOAD: address | type, start | size.
       const uint32_t address_type = LoadBE32(base + p + 4);
       if ((address_type & 3) == 0) {
-        scanned_vs_ = address_type & ~3u;
-        scanned_vs_object_ = vs_object;
+        const uint32_t address = address_type & ~3u;
+        keep(address, 0);
       }
-      p += 8;
     } else if ((header & 0xC000FF00) == kImmediateLoad) {
       // IM_LOAD_IMMEDIATE: type, start | size, then the microcode inline. The
       // library copies a vertex shader into the command buffer like this when
       // it patches it for the vertex declaration and links it to the pixel
       // shader (sub_825A37D8): that copy is what runs.
       const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
-      if ((LoadBE32(base + p + 4) & 3) == 0) {
-        scanned_vs_ = GuestToPhysical(p + 12);
-        scanned_vs_object_ = vs_object;
+      if ((LoadBE32(base + p + 4) & 3) == 0 && count > 2) {
+        keep(GuestToPhysical(p + 12), count - 2);
       }
-      p += 4 * count;
     }
   }
+}
+
+void Parallel::RecordOcclusion(const uint32_t* addresses, uint32_t count) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Item item;
+  item.occlusion = true;
+  item.report_count = std::min<uint32_t>(count, 4);
+  std::memcpy(item.reports, addresses, item.report_count * sizeof(uint32_t));
+  recording_->items.push_back(item);
 }
 
 void Parallel::SwapDone() {
@@ -449,6 +519,7 @@ void Parallel::Thread() {
   auto last_log = std::chrono::steady_clock::now();
   double render_ms = 0;
   uint64_t rendered_since_log = 0;
+  uint32_t shader_failures_logged = 0;
   for (;;) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -477,17 +548,29 @@ void Parallel::Thread() {
       const replay::RendererStats& s = renderer.stats();
       REXLOG_INFO(
           "[native renderer] 10 s: {} frames recorded, {} drawn ({:.1f} ms each), {} dropped | "
-          "last frame: {} draws ({} with unpatched vertex shaders), {} skipped, {} resolves, {} KB "
-          "uploaded | textures loaded {}, "
+          "last frame: {} draws ({} with unpatched vertex shaders), {} skipped ({} shaders unusable so far), "
+          "{} resolves, {} KB "
+          "uploaded, {} occlusion reports ({} samples) | textures loaded {}, "
           "reloaded {}, unsupported {} | pipelines {}, failed {} | ms: sync {:.1f}, textures {:.1f}, "
           "GPU wait {:.1f}",
           frames_recorded_.exchange(0), rendered_since_log,
           rendered_since_log ? render_ms / double(rendered_since_log) : 0.0,
-          frames_dropped_.exchange(0), s.draws, s.unpatched_vertex_shaders, s.draws_skipped,
-          s.resolves,
-          s.bytes_uploaded >> 10, s.textures_loaded,
+          frames_dropped_.exchange(0), s.draws, s.unpatched_vertex_shaders, s.draws_skipped, s.shader_failures,
+          s.resolves, s.bytes_uploaded >> 10, s.occlusion_reports, s.occlusion_samples, s.textures_loaded,
           s.textures_reloaded, s.textures_unsupported, s.pipelines, s.pipeline_failures, s.sync_ms,
           s.texture_ms, s.flush_ms);
+      if (s.shader_failures != shader_failures_logged) {
+        shader_failures_logged = s.shader_failures;
+        const replay::Renderer::ShaderFailure& bad = renderer.last_shader_failure();
+        REXLOG_WARN(
+            "[native renderer] unusable {} shader microcode at {:08X} ({} dwords): "
+            "{:08X} {:08X} {:08X} {:08X}",
+            bad.pixel ? "pixel" : "vertex", bad.address, bad.dwords,
+            replay::LoadBE32(reinterpret_cast<const uint8_t*>(&bad.first[0])),
+            replay::LoadBE32(reinterpret_cast<const uint8_t*>(&bad.first[1])),
+            replay::LoadBE32(reinterpret_cast<const uint8_t*>(&bad.first[2])),
+            replay::LoadBE32(reinterpret_cast<const uint8_t*>(&bad.first[3])));
+      }
       render_ms = 0;
       rendered_since_log = 0;
       last_log = now;
@@ -506,7 +589,13 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     return file;
   }();
   const Item* previous = nullptr;
+  auto* kernel = rex::system::kernel_state();
+  uint8_t* guest_memory = kernel->memory()->physical_membase();
   for (const Item& item : frame.items) {
+    if (item.occlusion) {
+      renderer.OcclusionEvent(item.reports, item.report_count, guest_memory);
+      continue;
+    }
     // Groups the previous item had the same are already in the file.
     const uint32_t* shadow = frame.registers.data() + item.registers;
     const uint32_t* previous_shadow = previous ? frame.registers.data() + previous->registers : nullptr;
@@ -571,8 +660,7 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
   }
   renderer.PresentToShared(frame.front_buffer);
   if (REXCVAR_GET(native_renderer_skip_emulation)) {
-    auto* kernel = rex::system::kernel_state();
-    renderer.WriteBackSmallResolves(kernel->memory()->physical_membase(), 64 * 1024);
+    renderer.WriteBackSmallResolves(guest_memory, 64 * 1024);
   }
   if (REXCVAR_GET(native_renderer_window)) {
     renderer.Present(frame.front_buffer);
@@ -640,4 +728,29 @@ extern "C" __declspec(dllexport) bool NfsmwNativeSkipEmulation() {
   replay::Renderer* renderer = Parallel::Get().renderer_.load();
   replay::SharedFrame frame;
   return renderer && renderer->GetSharedFrame(frame);
+}
+
+// The D3D library's occlusion query event (query type 9, sub_8258F810):
+// writes RB_SAMPLE_COUNT_ADDR and EVENT_WRITE_ZPD; r4 = query, r5 = which of
+// the two reports. With predicated tiling there is one report buffer per
+// tile (query +144 = count, +24 = addresses). The native renderer measures
+// the samples itself; the emulation no longer draws them.
+extern "C" REX_FUNC(__imp__sub_8258EA28);
+extern "C" REX_FUNC(sub_8258EA28) {
+  const uint32_t query = ctx.r4.u32, second = ctx.r5.u32;
+  __imp__sub_8258EA28(ctx, base);
+  if (!REXCVAR_GET(native_renderer)) {
+    return;
+  }
+  const uint32_t tiles = LoadBE32(base + query + 144);
+  uint32_t addresses[4];
+  uint32_t count = 0;
+  if (tiles <= 1) {
+    addresses[count++] = GuestToPhysical(LoadBE32(base + query + 24) + 32 * second);
+  } else {
+    for (uint32_t i = 0; i < tiles && count < 4; ++i) {
+      addresses[count++] = GuestToPhysical(LoadBE32(base + query + 24 + 4 * i) + 32 * second);
+    }
+  }
+  Parallel::Get().RecordOcclusion(addresses, count);
 }

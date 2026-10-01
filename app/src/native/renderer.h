@@ -74,6 +74,9 @@ struct SharedFrame {
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
+  uint32_t shader_failures = 0;  // microcode the analysis could not take
+  uint32_t occlusion_reports = 0;
+  uint64_t occlusion_samples = 0;
   uint32_t draws = 0, draws_skipped = 0, resolves = 0, textures_loaded = 0,
            textures_from_resolves = 0, textures_unsupported = 0, textures_reloaded = 0,
            pipelines = 0, bytes_uploaded = 0,
@@ -110,6 +113,11 @@ class Renderer {
   // GPU would write them (when the emulation no longer draws, the CPU still
   // reads some, like the brightness for the exposure). Returns how many.
   uint32_t WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_bytes);
+  // A guest occlusion query event (ZPD): the samples drawn since the previous
+  // one are added to a continuous counter, which goes to the report
+  // addresses (one per predicated tile; only the first gets the counter)
+  // once the GPU is done, like the SDK's ZPD handling.
+  void OcclusionEvent(const uint32_t* addresses, uint32_t count, uint8_t* guest_memory);
   // Copies changed guest memory into the GPU copy before the next draw.
   void UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size);
 
@@ -130,13 +138,20 @@ class Renderer {
   const std::vector<uint32_t>& resolve_order() const { return resolve_order_; }
 
   const RendererStats& stats() const { return stats_; }
+  struct ShaderFailure {
+    uint32_t address = 0, dwords = 0;
+    bool pixel = false;
+    uint32_t first[4] = {};  // the first microcode dwords, as stored (big-endian)
+  };
+  const ShaderFailure& last_shader_failure() const { return last_shader_failure_; }
   void ResetStats() { stats_ = {}; }
-  // Everything but the pipeline counts (which only grow).
+  // Everything but the pipeline and shader failure counts (which only grow).
   void ResetFrameStats() {
     const RendererStats kept = stats_;
     stats_ = {};
     stats_.pipelines = kept.pipelines;
     stats_.pipeline_failures = kept.pipeline_failures;
+    stats_.shader_failures = kept.shader_failures;
   }
   // Guest memory as the renderer sees it (for texture loading on the CPU).
   void SetGuestMemory(const uint8_t* memory) { guest_memory_ = memory; }
@@ -168,6 +183,9 @@ class Renderer {
     sets_[set_].after_completion.push_back(std::move(work));
   }
   bool CreatePresentPipeline();
+  bool EnsureOcclusionQueries();
+  void OcclusionBegin();
+  void OcclusionEnd();
   bool BeginList();
 
   ComPtr<IDXGIFactory4> factory_;
@@ -248,6 +266,21 @@ class Renderer {
   ComPtr<ID3D12RootSignature> present_root_signature_;
   ComPtr<ID3D12PipelineState> present_pipeline_;
   HWND window_ = nullptr;
+  ShaderFailure last_shader_failure_;
+
+  static constexpr uint32_t kOcclusionSlots = 16384;
+  struct OcclusionReport {
+    std::vector<uint32_t> slots;
+    std::vector<uint32_t> addresses;
+  };
+  ComPtr<ID3D12QueryHeap> occlusion_heap_;
+  ComPtr<ID3D12Resource> occlusion_readback_;
+  const uint64_t* occlusion_mapping_ = nullptr;
+  uint64_t occlusion_next_slot_ = 0;
+  uint32_t occlusion_slot_ = 0;
+  bool occlusion_open_ = false;
+  std::vector<uint32_t> occlusion_interval_;
+  uint64_t occlusion_counter_ = 0;
 
   static constexpr uint32_t kSharedOutputs = 3;
   struct SharedOutput {

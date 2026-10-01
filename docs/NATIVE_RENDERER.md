@@ -383,8 +383,7 @@ roam:
 | Native renderer | 263-271 | 177 (5.6 ms per frame on the renderer thread) |
 
 Profile of the renderer thread: memory comparison of the pages draws read
-(~20 %), the D3D12 driver (~25 %), Draw itself (~10 %). Occlusion queries
-report nothing while the emulation does not draw (sun flare).
+(~20 %), the D3D12 driver (~25 %), Draw itself (~10 %).
 
 **Dynamic shadows (car shadow), fixed:** for vertex shaders it patches and
 links to the pixel shader (`sub_825A37D8`), the library does not load the
@@ -395,14 +394,41 @@ command buffer. Before, the shadow casters ran the unpatched original
 (vertex fetches without format and stride) and drew nothing. Measured: 0 of
 2577 draws with an unpatched vertex shader; the car's shadow shows.
 
+**Occlusion queries (sun glare), done:** the library's ZPD event
+(`sub_8258EA28`, r4 = query, r5 = which report) is recorded in order with the
+draws. The native renderer measures the samples between two events with D3D12
+occlusion queries (one per command list the interval spans) and keeps a
+continuous counter, like the SDK: when the GPU is done, the counter goes into
+the event's report (`xe_gpu_depth_sample_counts`, Total_A and ZPass_A), and
+the game subtracts two reports. With predicated tiling there is one report
+address per tile (query +24, count at +144); the first gets the counter, the
+others a constant, so the sum over the tiles stays right. The SDK's
+`EVENT_WRITE_ZPD` only sets the event register while the native renderer
+runs. Measured in free roam: 10 reports per frame (the emulation counts 14
+events: two queries run once per tile, 3 tiles); the brightness of the frame
+matches the emulation with its own occlusion queries (mean 78.0 vs 77.9 of
+255). Before, the reports stayed constant (0 samples) and the game drew extra
+glare and a flare ring (mean 86.7).
+
+**Crash when the police car loads, fixed:** the vertex shader the library
+copies into the command buffer was kept by address. It loads a shader once
+while it stays bound, so frames later that address held other commands, and
+the SDK's microcode analysis crashed on the garbage (null names in the
+disassembly). The recorder now walks the command buffer packet by packet
+(payloads were taken for packet headers) and copies the microcode at the
+first draw after the load (the library fills the inline copy in after
+writing the packet header; before, it is `0x0000F00D` filler). Microcode the
+analysis still rejects is skipped (SEH guard, counted in the log,
+`REPLAY_BAD_SHADERS=<dir>` keeps it). Measured: 0 unusable shaders, 0
+unpatched vertex shaders. Host crashes write a symbolized stack to
+`nfsmw_crash.log` (`app/src/crash_log.cpp`).
+
 **Open:**
 - The renderer reads memory later than the draw happened: dynamic data the
   game rewrites in between can glitch.
 - Second graphics card: the renderer could run on the other adapter.
-- Next big step: stop the emulation from drawing the frames the native
-  renderer draws (skip the PM4 draws, keep what the game waits for: fences,
-  occlusion queries, resolves the CPU reads), which is where the speed gain
-  is.
+- The presenter crops the native picture like the emulated one (89 %), so
+  the HUD sits a little off.
 
 ## Options
 

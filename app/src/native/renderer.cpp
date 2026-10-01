@@ -613,6 +613,10 @@ void Renderer::ActivateSet(uint32_t index) {
 bool Renderer::Submit() { return Submit(false); }
 
 bool Renderer::Submit(bool wait_for_all) {
+  // An occlusion query cannot span command lists: end it here, begin a new
+  // one for the same interval in the next list.
+  const bool reopen_occlusion = occlusion_open_;
+  OcclusionEnd();
   if (list_open_) {
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
@@ -644,6 +648,9 @@ bool Renderer::Submit(bool wait_for_all) {
     return false;
   }
   BeginList();
+  if (reopen_occlusion) {
+    OcclusionBegin();
+  }
   return true;
 }
 
@@ -682,6 +689,19 @@ void Renderer::UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size
   list_->CopyBufferRegion(shared_memory_.Get(), address, buffer, buffer_offset, size);
 }
 
+namespace {
+// The analysis of microcode that is not a valid program can also fault (its
+// disassembly reads null names); no C++ objects here, so SEH can guard it.
+bool AnalyzeUcodeGuarded(DxbcShader* shader, rex::string::StringBuffer& disasm) {
+  __try {
+    shader->AnalyzeUcode(disasm);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+}  // namespace
+
 Renderer::Shader* Renderer::GetShader(const uint8_t* code, uint32_t dwords, uint32_t address,
                                       bool pixel, uint64_t hash) {
   // By content: the same address holds different (patched) programs.
@@ -697,7 +717,26 @@ Renderer::Shader* Renderer::GetShader(const uint8_t* code, uint32_t dwords, uint
   shader->shader = std::make_unique<DxbcShader>(
       pixel ? xenos::ShaderType::kPixel : xenos::ShaderType::kVertex, key,
       reinterpret_cast<const uint32_t*>(code), dwords);
-  shader->shader->AnalyzeUcode(disasm_);
+  // Microcode the analysis cannot take (its disassembly throws or faults on
+  // fields it does not know) is remembered as unusable; those draws are
+  // skipped.
+  if (!AnalyzeUcodeGuarded(shader->shader.get(), disasm_)) {
+    ++stats_.shader_failures;
+    last_shader_failure_ = {address, dwords, pixel};
+    std::memcpy(last_shader_failure_.first, code, std::min<size_t>(sizeof(last_shader_failure_.first), size_t(dwords) * 4));
+    // REPLAY_BAD_SHADERS=<directory>: keep their microcode for a look.
+    if (const char* directory = std::getenv("REPLAY_BAD_SHADERS")) {
+      char path[512];
+      std::snprintf(path, sizeof(path), "%s/bad_%s_%016llx.bin", directory, pixel ? "ps" : "vs",
+                    (unsigned long long)hash);
+      if (FILE* out = std::fopen(path, "wb")) {
+        std::fwrite(code, 4, dwords, out);
+        std::fclose(out);
+      }
+    }
+    shaders_.emplace(key, nullptr);
+    return nullptr;
+  }
   // REPLAY_DISASM=<hex address>: print that shader's microcode.
   if (const char* want = std::getenv("REPLAY_DISASM")) {
     if (std::strtoul(want, nullptr, 16) == address) {
@@ -1094,6 +1133,10 @@ void Renderer::Draw(const DrawCall& d) {
   Shader* vs =
       GetShader(d.vertex_shader_code, d.vertex_shader_dwords, d.vertex_shader_address, false,
                 d.vertex_shader_hash);
+  if (!vs) {
+    ++stats_.draws_skipped;
+    return;
+  }
   const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
   if (!draw_util::IsRasterizationPotentiallyDone(regs, polygonal)) {
     ++stats_.draws_skipped;
@@ -1103,6 +1146,10 @@ void Renderer::Draw(const DrawCall& d) {
   if (mode == xenos::EdramMode::kColorDepth && d.pixel_shader_dwords) {
     ps = GetShader(d.pixel_shader_code, d.pixel_shader_dwords, d.pixel_shader_address, true,
                    d.pixel_shader_hash);
+    if (!ps) {
+      ++stats_.draws_skipped;
+      return;
+    }
     if (!draw_util::IsPixelShaderNeededWithRasterization(*ps->shader, regs)) {
       ps = nullptr;
     }
@@ -2447,6 +2494,98 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
   }
   });
   return count;
+}
+
+// ---------------------------------------------------------------------------
+// Occlusion queries (the guest's ZPD events), the way the SDK counts them: a
+// continuous sample counter, written at every event to the event's report
+// address; the game subtracts two reports. Between two events the samples
+// are measured with host occlusion queries (one per command list the interval
+// spans), resolved into a ring of readback slots.
+
+bool Renderer::EnsureOcclusionQueries() {
+  if (occlusion_heap_) {
+    return true;
+  }
+  D3D12_QUERY_HEAP_DESC heap_desc = {};
+  heap_desc.Type = D3D12_QUERY_HEAP_TYPE_OCCLUSION;
+  heap_desc.Count = kOcclusionSlots;
+  D3D12_HEAP_PROPERTIES readback_heap = {D3D12_HEAP_TYPE_READBACK};
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  desc.Width = kOcclusionSlots * sizeof(uint64_t);
+  desc.Height = 1;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  if (FAILED(device_->CreateQueryHeap(&heap_desc, IID_PPV_ARGS(&occlusion_heap_))) ||
+      FAILED(device_->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                              D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                              IID_PPV_ARGS(&occlusion_readback_)))) {
+    occlusion_heap_.Reset();
+    return false;
+  }
+  D3D12_RANGE range = {0, size_t(desc.Width)};
+  void* mapping;
+  occlusion_readback_->Map(0, &range, &mapping);
+  occlusion_mapping_ = static_cast<const uint64_t*>(mapping);
+  return true;
+}
+
+void Renderer::OcclusionBegin() {
+  if (!occlusion_heap_ || occlusion_open_) {
+    return;
+  }
+  occlusion_slot_ = uint32_t(occlusion_next_slot_++ % kOcclusionSlots);
+  list_->BeginQuery(occlusion_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, occlusion_slot_);
+  occlusion_open_ = true;
+}
+
+void Renderer::OcclusionEnd() {
+  if (!occlusion_open_) {
+    return;
+  }
+  list_->EndQuery(occlusion_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, occlusion_slot_);
+  list_->ResolveQueryData(occlusion_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, occlusion_slot_, 1,
+                          occlusion_readback_.Get(), sizeof(uint64_t) * occlusion_slot_);
+  occlusion_interval_.push_back(occlusion_slot_);
+  occlusion_open_ = false;
+}
+
+void Renderer::OcclusionEvent(const uint32_t* addresses, uint32_t count, uint8_t* guest_memory) {
+  if (!EnsureOcclusionQueries()) {
+    return;
+  }
+  OcclusionEnd();
+  OcclusionReport report;
+  report.slots = std::move(occlusion_interval_);
+  occlusion_interval_.clear();
+  report.addresses.assign(addresses, addresses + count);
+  // Delivered in order once the GPU is done with what was recorded so far.
+  AfterCompletion([this, guest_memory, report = std::move(report)]() {
+    uint64_t samples = 0;
+    for (uint32_t slot : report.slots) {
+      samples += occlusion_mapping_[slot];
+    }
+    occlusion_counter_ += samples;
+    stats_.occlusion_samples += samples;
+    ++stats_.occlusion_reports;
+    for (size_t i = 0; i < report.addresses.size(); ++i) {
+      // The first report gets the counter; the others (predicated tiling,
+      // one per tile) a constant, so their begin and end differ by nothing.
+      const uint32_t value = i ? 0u : uint32_t(occlusion_counter_);
+      const uint32_t address = report.addresses[i];
+      if (!address || uint64_t(address) + 32 > kSharedMemorySize || !Readable(address, 32)) {
+        continue;
+      }
+      // xe_gpu_depth_sample_counts: Total_A/B, ZFail_A/B, ZPass_A/B,
+      // StencilFail_A/B, little-endian (the guest's D3D swaps them).
+      uint32_t counts[8] = {value, 0, 0, 0, value, 0, 0, 0};
+      std::memcpy(guest_memory + address, counts, sizeof(counts));
+    }
+  });
+  OcclusionBegin();
 }
 
 }  // namespace replay
