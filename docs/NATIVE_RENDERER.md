@@ -421,6 +421,26 @@ and the game's main thread:
 - Left on the renderer thread: mostly the D3D12 driver and Draw itself; on
   the game thread the recording is ~15 % (was 41 %).
 
+**Launcher: native only (2026-10-01).** The launcher always starts the game
+with the native renderer (Direct3D 12); the emulation-only options (graphics
+API, EDRAM path, emulated shader cache, emulated texture streaming, FXAA)
+are gone. Its "Internal scale" now is the native renderer's
+(`--native_renderer_scale`, 1-4), the emulation runs at 1x (it draws
+nothing), and its anisotropic filtering applies to the native renderer too
+(`--native_renderer_anisotropic`).
+
+**Supersampling (internal scale), done:** the native renderer draws at a
+multiple of 1280x720: render targets, viewports and scissors, resolve
+rectangles and destinations, clears and the output are scaled; the SDK's
+shader translator gets the scale (pixel positions, unnormalized texture
+coordinates and sizes of scaled textures, per fetch constant through
+`textures_resolution_scaled`). Small resolves the CPU reads (exposure) are
+written back at the guest's size (mean of each block), occlusion samples are
+divided by scale^2. The SDK's swap now takes the whole native picture (the
+swap packet's 1280x720 cropped it to the top-left quarter). Measured: 2x
+(2560x1440) and 4x (5120x2880) in free roam, 60 fps, renderer thread
+3.5-4.1 ms per frame, visibly sharper with smoother edges.
+
 **Rare unusable vertex shaders, fixed:** in some runs without frame limit
 2-7 vertex shaders a run could not be analyzed (the draw was skipped). Their
 microcode was one control flow triple followed by ordinary PM4 packets. When

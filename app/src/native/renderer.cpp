@@ -298,6 +298,9 @@ struct Renderer::HostTexture {
   // a sampled hash of it, compared once per frame.
   uint32_t check_address = 0, check_size = 0;
   uint64_t check_hash = 0, checked_frame = 0;
+  // Drawn at the renderer's scale (resolve destinations): shaders get their
+  // unnormalized coordinates and sizes scaled.
+  bool scaled = false;
   // Resolve destinations: their fetch constant (guest layout) and the frame
   // they were last written in.
   uint32_t guest_fetch[6] = {};
@@ -309,8 +312,10 @@ struct Renderer::Pipeline {
   ComPtr<ID3D12PipelineState> state;
 };
 
-Renderer::Renderer()
-    : translator_(rex::ui::GraphicsProvider::GpuVendorID::kNvidia, false, false) {}
+Renderer::Renderer(uint32_t scale)
+    : scale_(std::clamp<uint32_t>(scale, 1, 4)),
+      translator_(rex::ui::GraphicsProvider::GpuVendorID::kNvidia, false, false, false, true,
+                  std::clamp<uint32_t>(scale, 1, 4), std::clamp<uint32_t>(scale, 1, 4)) {}
 
 Renderer::~Renderer() {
   if (fence_event_) {
@@ -759,8 +764,8 @@ Renderer::RenderTarget* Renderer::GetRenderTarget(uint32_t edram_base, uint32_t 
     return it->second.get();
   }
   auto rt = std::make_unique<RenderTarget>();
-  rt->width = std::max<uint32_t>(pitch, 1);
-  rt->height = kRenderTargetHeight;
+  rt->width = std::max<uint32_t>(pitch, 1) * scale_;
+  rt->height = kRenderTargetHeight * scale_;
   rt->samples = 1u << msaa;
   rt->depth = depth;
   D3D12_RESOURCE_DESC desc = {};
@@ -1425,7 +1430,7 @@ void Renderer::Draw(const DrawCall& d) {
     }
   }
   draw_util::ViewportInfo viewport;
-  draw_util::GetHostViewportInfo(regs, 1, 1, true, D3D12_VIEWPORT_BOUNDS_MAX,
+  draw_util::GetHostViewportInfo(regs, scale_, scale_, true, D3D12_VIEWPORT_BOUNDS_MAX,
                                  D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control, false, true,
                                  ps && ps->shader->writes_depth(), viewport);
   for (uint32_t i = 0; i < 3; ++i) {
@@ -1466,6 +1471,9 @@ void Renderer::Draw(const DrawCall& d) {
       const bool volume = binding.dimension == xenos::FetchOpDimension::k3DOrStacked;
       if (texture && (volume != texture->is_3d || (cube && texture->array_size != 6))) {
         texture = nullptr;
+      }
+      if (texture && texture->scaled) {
+        system.textures_resolution_scaled |= uint32_t(1) << binding.fetch_constant;
       }
       if (texture) {
         Transition(texture->resource.Get(), texture->state,
@@ -1531,9 +1539,17 @@ void Renderer::Draw(const DrawCall& d) {
       const xenos::TextureFilter mag = pick(binding.mag_filter, fetch.mag_filter);
       const xenos::TextureFilter min = pick(binding.min_filter, fetch.min_filter);
       const xenos::TextureFilter mip = pick(binding.mip_filter, fetch.mip_filter);
-      const xenos::AnisoFilter aniso = binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
-                                           ? fetch.aniso_filter
-                                           : binding.aniso_filter;
+      xenos::AnisoFilter aniso = binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
+                                     ? fetch.aniso_filter
+                                     : binding.aniso_filter;
+      // The launcher's anisotropic filtering, on the textures the SDK's
+      // texture cache would force it on (linear, with mips).
+      if (anisotropic_override_ >= 0 && anisotropic_override_ < 6 &&
+          mag == xenos::TextureFilter::kLinear && min == xenos::TextureFilter::kLinear &&
+          (mip == xenos::TextureFilter::kPoint || mip == xenos::TextureFilter::kLinear) &&
+          fetch.mip_max_level > fetch.mip_min_level) {
+        aniso = xenos::AnisoFilter(anisotropic_override_);
+      }
       xenos::ClampMode cx, cy, cz;
       texture_util::GetClampModesForDimension(fetch, cx, cy, cz);
       D3D12_SAMPLER_DESC s = {};
@@ -1747,9 +1763,9 @@ void Renderer::Draw(const DrawCall& d) {
   }
   draw_util::Scissor scissor;
   draw_util::GetScissor(regs, scissor);
-  D3D12_RECT rect = {LONG(scissor.offset[0]), LONG(scissor.offset[1]),
-                     LONG(scissor.offset[0] + scissor.extent[0]),
-                     LONG(scissor.offset[1] + scissor.extent[1])};
+  D3D12_RECT rect = {LONG(scissor.offset[0] * scale_), LONG(scissor.offset[1] * scale_),
+                     LONG((scissor.offset[0] + scissor.extent[0]) * scale_),
+                     LONG((scissor.offset[1] + scissor.extent[1]) * scale_)};
   if (!b.valid || std::memcmp(&b.scissor, &rect, sizeof(rect))) {
     list_->RSSetScissorRects(1, &rect);
     b.scissor = rect;
@@ -1872,7 +1888,9 @@ void Renderer::Resolve(const ResolveCall& r) {
   // Destination texture, by its physical base address.
   const uint32_t* f = r.dest_fetch;
   const uint32_t base = GuestToPhysical(f[1] & 0xFFFFF000);
-  const uint32_t width = (f[2] & 0x1FFF) + 1, height = ((f[2] >> 13) & 0x1FFF) + 1;
+  // At the renderer's scale, like the render targets it is copied from.
+  const uint32_t width = ((f[2] & 0x1FFF) + 1) * scale_;
+  const uint32_t height = (((f[2] >> 13) & 0x1FFF) + 1) * scale_;
   const bool cube = ((f[5] >> 9) & 3) == 3;
   const uint32_t array_size = cube ? 6 : 1;
   const DXGI_FORMAT format = source->depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1921,15 +1939,17 @@ void Renderer::Resolve(const ResolveCall& r) {
   }
   std::memcpy(dest->guest_fetch, r.dest_fetch, sizeof(dest->guest_fetch));
   dest->resolved_frame = frame_;
+  dest->scaled = scale_ > 1;
   if (std::find(resolve_order_.begin(), resolve_order_.end(), base) == resolve_order_.end()) {
     resolve_order_.push_back(base);
   }
 
   // Copy (with MSAA resolve) through a full-screen triangle.
-  int32_t left = std::max(r.rect[0], 0), top = std::max(r.rect[1], 0);
-  int32_t right = std::min<int32_t>(r.rect[2], int32_t(source->width));
-  int32_t bottom = std::min<int32_t>(r.rect[3], int32_t(source->height));
-  const int32_t dest_x = r.dest_point[0], dest_y = r.dest_point[1];
+  const int32_t s = int32_t(scale_);
+  int32_t left = std::max(r.rect[0] * s, 0), top = std::max(r.rect[1] * s, 0);
+  int32_t right = std::min<int32_t>(r.rect[2] * s, int32_t(source->width));
+  int32_t bottom = std::min<int32_t>(r.rect[3] * s, int32_t(source->height));
+  const int32_t dest_x = r.dest_point[0] * s, dest_y = r.dest_point[1] * s;
   Transition(source->resource.Get(), source->state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   Transition(dest->resource.Get(), dest->state, D3D12_RESOURCE_STATE_RENDER_TARGET);
   D3D12_CPU_DESCRIPTOR_HANDLE cpu;
@@ -2509,7 +2529,7 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
   for (auto& [base, texture] : resolved_) {
     if (!texture || texture->resolved_frame != frame_ ||
         texture->format != DXGI_FORMAT_R8G8B8A8_UNORM || texture->array_size != 1 ||
-        texture->width * texture->height * 4 > max_bytes) {
+        (texture->width / scale_) * (texture->height / scale_) * 4 > max_bytes) {
       continue;
     }
     D3D12_RESOURCE_DESC desc = texture->resource->GetDesc();
@@ -2548,8 +2568,9 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
     dst.PlacedFootprint = p.footprint;
     list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     std::memcpy(p.fetch, texture->guest_fetch, sizeof(p.fetch));
-    p.width = texture->width;
-    p.height = texture->height;
+    // The guest's size; at a scale, each guest texel is the mean of its block.
+    p.width = texture->width / scale_;
+    p.height = texture->height / scale_;
     p.texture = nullptr;
     pending.push_back(std::move(p));
   }
@@ -2560,7 +2581,8 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
   // Into guest memory once the GPU is done, the way the GPU writes a
   // resolve: in the destination texture's layout (tiled, 32 texels per row
   // of tiles) and byte order.
-  AfterCompletion([this, guest_memory, pending = std::move(pending)]() mutable {
+  const uint32_t scale = scale_;
+  AfterCompletion([this, guest_memory, scale, pending = std::move(pending)]() mutable {
   for (Pending& p : pending) {
     struct {
       uint32_t width, height;
@@ -2573,12 +2595,11 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
       continue;
     }
     const uint8_t* data;
-    D3D12_RANGE range = {0, size_t(p.footprint.Footprint.RowPitch) * t.height};
+    D3D12_RANGE range = {0, size_t(p.footprint.Footprint.RowPitch) * t.height * scale};
     if (FAILED(p.readback->Map(0, &range, reinterpret_cast<void**>(const_cast<uint8_t**>(&data))))) {
       continue;
     }
     for (uint32_t y = 0; y < t.height; ++y) {
-      const uint8_t* row = data + size_t(y) * p.footprint.Footprint.RowPitch;
       for (uint32_t x = 0; x < t.width; ++x) {
         const uint32_t offset =
             fetch.tiled ? uint32_t(texture_util::GetTiledOffset2D(int32_t(x), int32_t(y),
@@ -2588,8 +2609,20 @@ uint32_t Renderer::WriteBackSmallResolves(uint8_t* guest_memory, uint32_t max_by
           continue;
         }
         // Host R8G8B8A8 back into the guest's byte order.
+        uint32_t sum[4] = {};
+        for (uint32_t sy = 0; sy < scale; ++sy) {
+          const uint8_t* row =
+              data + size_t(y * scale + sy) * p.footprint.Footprint.RowPitch + 4 * x * scale;
+          for (uint32_t sx = 0; sx < scale; ++sx) {
+            for (uint32_t c = 0; c < 4; ++c) {
+              sum[c] += row[4 * sx + c];
+            }
+          }
+        }
         uint8_t texel[4];
-        std::memcpy(texel, row + 4 * x, 4);
+        for (uint32_t c = 0; c < 4; ++c) {
+          texel[c] = uint8_t((sum[c] + scale * scale / 2) / (scale * scale));
+        }
         uint8_t* out = guest_memory + base + offset;
         switch (fetch.endianness) {
           case xenos::Endian::k8in32:
@@ -2685,6 +2718,8 @@ void Renderer::OcclusionEvent(const uint32_t* addresses, uint32_t count, uint8_t
     for (uint32_t slot : report.slots) {
       samples += occlusion_mapping_[slot];
     }
+    // In the guest's samples: at a scale every guest pixel is scale^2 host ones.
+    samples /= uint64_t(scale_) * scale_;
     occlusion_counter_ += samples;
     stats_.occlusion_samples += samples;
     ++stats_.occlusion_reports;

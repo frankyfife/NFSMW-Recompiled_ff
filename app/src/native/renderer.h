@@ -87,8 +87,14 @@ struct RendererStats {
 
 class Renderer {
  public:
-  Renderer();
+  // scale: the frame is drawn at this multiple of the guest's resolution
+  // (render targets, viewports, resolves and the output; 1-4).
+  explicit Renderer(uint32_t scale = 1);
   ~Renderer();
+  uint32_t scale() const { return scale_; }
+  // Anisotropic filtering forced on textures with linear filtering and mips,
+  // as xenos::AnisoFilter (0 off, 1-5 = 1x-16x); -1 leaves the game's.
+  void SetAnisotropicOverride(int32_t value) { anisotropic_override_ = value; }
 
   bool Initialize();
   // Uploads the whole guest physical memory (512 MB).
@@ -236,6 +242,8 @@ class Renderer {
   std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> sampler_ranges_;
   std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> texture_ranges_;
 
+  uint32_t scale_ = 1;
+  int32_t anisotropic_override_ = -1;
   rex::graphics::DxbcShaderTranslator translator_;
   rex::string::StringBuffer disasm_;
   std::unordered_map<uint64_t, std::unique_ptr<Shader>> shaders_;

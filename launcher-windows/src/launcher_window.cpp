@@ -64,10 +64,8 @@ constexpr Choice kLanguages[] = {
     {"French", "4"},                 {"Spanish", "5"}, {"Italian", "6"},
 };
 
-const QStringList kAaValues = {"none", "fxaa", "fxaa_extreme"};
 const QList<int> kAnisoValues = {0, 2, 3, 4, 5};  // off, 2x, 4x, 8x, 16x
 const QStringList kFilterValues = {"bilinear", "cas", "fsr"};
-const QStringList kEdramValues = {"auto", "rtv", "rov"};
 
 QLabel* note(const QString& text = QString()) {
   auto* l = new QLabel(text);
@@ -299,12 +297,6 @@ QString LauncherWindow::isoCacheDir(const QString& iso) const {
                               iso::safeName(QFileInfo(iso).completeBaseName()));
 }
 
-// The SDK keeps Xenia-style shader storage in Documents\nfsmw\cache.
-QString LauncherWindow::shaderCacheDir() {
-  return QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
-      .filePath(QStringLiteral("nfsmw/cache/shaders/shareable"));
-}
-
 QWidget* LauncherWindow::buildContent() {
   auto* content = new QWidget;
   auto* cols = new QHBoxLayout(content);
@@ -429,8 +421,6 @@ QWidget* LauncherWindow::buildContent() {
 
   // ---- Image quality ----
   auto* image = new Card(QStringLiteral("Image quality"));
-  aa_ = new Segmented({QStringLiteral("Off"), QStringLiteral("FXAA"), QStringLiteral("FXAA Extreme")});
-  image->addRow(QStringLiteral("Anti-aliasing"), aa_);
   aniso_ = new Segmented({QStringLiteral("Off"), QStringLiteral("2×"), QStringLiteral("4×"),
                           QStringLiteral("8×"), QStringLiteral("16×")});
   image->addRow(QStringLiteral("Anisotropic"), aniso_);
@@ -449,38 +439,11 @@ QWidget* LauncherWindow::buildContent() {
   sr->addWidget(sharpness_, 1);
   sr->addWidget(sharpnessValue_);
   image->addRow(QStringLiteral("Sharpness"), sharpRow);
-  connect(aa_, &Segmented::currentIndexChanged, this, onChange);
   connect(aniso_, &Segmented::currentIndexChanged, this, onChange);
   connect(filter_, &Segmented::currentIndexChanged, this, onChange);
   connect(sharpness_, &QSlider::valueChanged, this, onChange);
   right->addWidget(image);
 
-  // ---- Renderer & shaders ----
-  auto* renderer = new Card(QStringLiteral("Renderer & shaders"));
-  api_ = new Segmented({QStringLiteral("Direct3D 12"), QStringLiteral("Vulkan (exp.)")});
-  renderer->addRow(QStringLiteral("Graphics API"), api_);
-  edram_ = new Segmented({QStringLiteral("Auto"), QStringLiteral("Fast (RTV)"),
-                          QStringLiteral("Accurate (ROV)")});
-  renderer->addRow(QStringLiteral("EDRAM path"), edram_);
-  asyncShaders_ = new ToggleSwitch(QStringLiteral("Compile shaders in the background (less stutter)"));
-  renderer->addWide(asyncShaders_);
-  auto* cacheRow = new QWidget;
-  auto* cc = new QHBoxLayout(cacheRow);
-  cc->setContentsMargins(0, 0, 0, 0);
-  cc->setSpacing(8);
-  cacheNote_ = note();
-  auto* openCache = new QPushButton(QStringLiteral("Open"));
-  auto* clearCache = new QPushButton(QStringLiteral("Clear"));
-  cc->addWidget(cacheNote_, 1);
-  cc->addWidget(openCache, 0, Qt::AlignTop);
-  cc->addWidget(clearCache, 0, Qt::AlignTop);
-  renderer->addWide(cacheRow);
-  connect(api_, &Segmented::currentIndexChanged, this, onChange);
-  connect(edram_, &Segmented::currentIndexChanged, this, onChange);
-  connect(asyncShaders_, &ToggleSwitch::toggled, this, onChange);
-  connect(openCache, &QPushButton::clicked, this, &LauncherWindow::openShaderCache);
-  connect(clearCache, &QPushButton::clicked, this, &LauncherWindow::clearShaderCache);
-  right->addWidget(renderer);
   right->addStretch();
 
   return content;
@@ -556,37 +519,6 @@ QWidget* LauncherWindow::buildAdvanced() {
   left->addWidget(latency);
   left->addStretch();
 
-  // ---- Textures ----
-  auto* textures = new Card(QStringLiteral("Texture streaming"));
-  textureHeaps_ = new ToggleSwitch(QStringLiteral("Shared texture heaps"));
-  textures->addWide(textureHeaps_);
-  addNote(textures, QStringLiteral(
-                        "New textures are placed in pre-allocated 64 MB blocks instead of "
-                        "one driver allocation each: 0.04 instead of 0.35 ms per texture, "
-                        "which removes the hitches while the city streams in."));
-  // A spin box alone would leave the grid at its minimum width (the whole card
-  // content ends up centered): give each one a row that stretches.
-  const auto stretched = [](QWidget* w) {
-    auto* row = new QWidget;
-    auto* h = new QHBoxLayout(row);
-    h->setContentsMargins(0, 0, 0, 0);
-    h->addWidget(w);
-    h->addStretch(1);
-    return row;
-  };
-  textureSoft_ = spin(64, 4096);
-  textureSoft_->setSingleStep(256);
-  textures->addRow(QStringLiteral("Cache soft limit (MB)"), stretched(textureSoft_));
-  textureHard_ = spin(128, 8192);
-  textureHard_->setSingleStep(256);
-  textures->addRow(QStringLiteral("Cache hard limit (MB)"), stretched(textureHard_));
-  addNote(textures, QStringLiteral(
-                        "Above these the cache drops textures and has to create them again "
-                        "later. A full city run stayed under 400 MB."));
-  connect(textureHeaps_, &ToggleSwitch::toggled, this, onChange);
-  connect(textureSoft_, &QSpinBox::valueChanged, this, onChange);
-  connect(textureHard_, &QSpinBox::valueChanged, this, onChange);
-  right->addWidget(textures);
 
   // ---- Diagnostics ----
   auto* diagnostics = new Card(QStringLiteral("Diagnostics"));
@@ -618,9 +550,6 @@ void LauncherWindow::resetAdvanced() {
   smoothMs_->setValue(6);
   displayLock_->setCurrentIndex(1);
   presentPerFrame_->setChecked(true);
-  textureHeaps_->setChecked(true);
-  textureSoft_->setValue(2048);
-  textureHard_->setValue(4096);
   logStats_->setChecked(true);
   logBreakdown_->setChecked(false);
   refresh();
@@ -690,17 +619,12 @@ void LauncherWindow::loadSettings() {
   // v2: V-Sync off by default -it measured worse- and the old key is ignored.
   vsync_->setChecked(s.value("frame/vsync2", false).toBool());
 
-  aa_->setCurrentIndex(std::max<qsizetype>(0, kAaValues.indexOf(s.value("image/aa", "none").toString())));
   const qsizetype an = kAnisoValues.indexOf(s.value("image/anisotropic", 4).toInt());
   aniso_->setCurrentIndex(an >= 0 ? int(an) : 3);
   filter_->setCurrentIndex(
       std::max<qsizetype>(0, kFilterValues.indexOf(s.value("image/filter", "bilinear").toString())));
   sharpness_->setValue(s.value("image/sharpness", 50).toInt());
 
-  api_->setCurrentIndex(s.value("renderer/api", "d3d12").toString() == "vulkan" ? 1 : 0);
-  edram_->setCurrentIndex(
-      std::max<qsizetype>(0, kEdramValues.indexOf(s.value("renderer/edram", "auto").toString())));
-  asyncShaders_->setChecked(s.value("renderer/async_shaders", true).toBool());
 
   pacingAtGuest_->setChecked(s.value("advanced/pacing_at_guest", true).toBool());
   lowLatency_->setChecked(s.value("advanced/low_latency", true).toBool());
@@ -708,9 +632,6 @@ void LauncherWindow::loadSettings() {
   smoothMs_->setValue(s.value("advanced/smooth_ms", 6).toInt());
   displayLock_->setCurrentIndex(std::clamp(s.value("advanced/display_lock", 1).toInt(), 0, 2));
   presentPerFrame_->setChecked(s.value("advanced/present_per_frame", true).toBool());
-  textureHeaps_->setChecked(s.value("advanced/texture_heaps", true).toBool());
-  textureSoft_->setValue(s.value("advanced/texture_soft_mb", 2048).toInt());
-  textureHard_->setValue(s.value("advanced/texture_hard_mb", 4096).toInt());
   logStats_->setChecked(s.value("advanced/log_stats", true).toBool());
   logBreakdown_->setChecked(s.value("advanced/log_breakdown", false).toBool());
 }
@@ -731,22 +652,15 @@ void LauncherWindow::saveSettings() const {
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
   s.setValue("frame/vsync2", vsync_->isChecked());
-  s.setValue("image/aa", kAaValues[aa_->currentIndex()]);
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
   s.setValue("image/sharpness", sharpness_->value());
-  s.setValue("renderer/api", api_->currentIndex() == 1 ? "vulkan" : "d3d12");
-  s.setValue("renderer/edram", kEdramValues[edram_->currentIndex()]);
-  s.setValue("renderer/async_shaders", asyncShaders_->isChecked());
   s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
   s.setValue("advanced/low_latency", lowLatency_->isChecked());
   s.setValue("advanced/adaptive_pacing", adaptivePacing_->isChecked());
   s.setValue("advanced/smooth_ms", smoothMs_->value());
   s.setValue("advanced/display_lock", displayLock_->currentIndex());
   s.setValue("advanced/present_per_frame", presentPerFrame_->isChecked());
-  s.setValue("advanced/texture_heaps", textureHeaps_->isChecked());
-  s.setValue("advanced/texture_soft_mb", textureSoft_->value());
-  s.setValue("advanced/texture_hard_mb", textureHard_->value());
   s.setValue("advanced/log_stats", logStats_->isChecked());
   s.setValue("advanced/log_breakdown", logBreakdown_->isChecked());
   s.sync();
@@ -812,12 +726,19 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << flag("mnk_mode", true);
   a << opt("readback_resolve", "fast");  // without it the image comes out washed out
 
-  // Always passed: the command line wins over nfsmw.toml, so an API picked in
-  // the F4 menu that shows a black screen can never lock the game out.
-  a << opt("gpu_backend", api_->currentIndex() == 1 ? "vulkan" : "d3d12");
+  // The game's frames are drawn by its own Direct3D 12 renderer
+  // (docs/NATIVE_RENDERER.md); the emulated draws are skipped and its picture
+  // reaches the window through the D3D12 swap. Always passed: the command line
+  // wins over nfsmw.toml (an API picked in the F4 menu cannot lock it out).
+  a << opt("gpu_backend", "d3d12");
+  a << flag("native_renderer", true);
 
   a << opt("resolution", outputResolution());
-  a << opt("resolution_scale", QString::number(scale_->currentIndex() + 1));
+  // The internal scale is the native renderer's: it draws at that multiple of
+  // the game's 1280x720 (supersampling). The emulation draws nothing, so its
+  // own render targets stay at 1x.
+  a << opt("resolution_scale", "1");
+  a << opt("native_renderer_scale", QString::number(scale_->currentIndex() + 1));
   a << flag("fullscreen", mode_->currentIndex() == 0);
   a << opt("monitor", QString::number(std::max(0, monitor_->currentIndex())));
 
@@ -834,8 +755,9 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << opt("frame_pacing_fps", QString::number(targetFps()));
   a << opt("max_fps", "0");
 
-  a << opt("swap_post_effect", kAaValues[aa_->currentIndex()]);
+  a << opt("swap_post_effect", "none");
   a << opt("anisotropic_override", QString::number(kAnisoValues[aniso_->currentIndex()]));
+  a << opt("native_renderer_anisotropic", QString::number(kAnisoValues[aniso_->currentIndex()]));
   // Advanced tab (see buildAdvanced for what each one does).
   a << flag("frame_pacing_at_guest", pacingAtGuest_->isChecked());
   a << flag("frame_pacing_low_latency", lowLatency_->isChecked());
@@ -843,17 +765,10 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << opt("frame_pacing_smooth_max_ms", QString::number(smoothMs_->value()));
   a << opt("frame_pacing_display_lock", QString::number(displayLock_->currentIndex()));
   a << flag("present_ui_with_guest_frames", presentPerFrame_->isChecked());
-  a << flag("d3d12_texture_heaps", textureHeaps_->isChecked());
-  // The Xenia defaults (384/768 MB) are sized for small GPUs.
-  a << opt("texture_cache_memory_limit_soft", QString::number(textureSoft_->value()));
-  a << opt("texture_cache_memory_limit_hard",
-           QString::number(std::max(textureHard_->value(), textureSoft_->value())));
   if (filter_->currentIndex() != 0) {
     a << opt("present_effect", kFilterValues[filter_->currentIndex()]);
   }
   a << opt("present_cas_additional_sharpness", QString::number(sharpness_->value() / 100.0, 'f', 2));
-  if (edram_->currentIndex() == 1) a << opt("render_target_path_d3d12", "rtv");
-  if (edram_->currentIndex() == 2) a << opt("render_target_path_d3d12", "rov");
 
   const QString lang = QString::fromLatin1(kLanguages[language_->currentIndex()].value);
   if (lang != QLatin1String("0")) {
@@ -861,8 +776,6 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   }
   a << QStringLiteral("--black_edition=%1").arg(blackEdition_->isChecked() ? "true" : "false");
   a << QStringLiteral("--unlock_all=%1").arg(unlockAll_->isChecked() ? "true" : "false");
-  a << QStringLiteral("--async_shader_compilation=%1")
-           .arg(asyncShaders_->isChecked() ? "true" : "false");
   // Every 10 s: frames the game really presents, latency, texture cache.
   a << flag("log_guest_fps", logStats_->isChecked());
   a << flag("log_frame_breakdown", logBreakdown_->isChecked());
@@ -894,11 +807,13 @@ void LauncherWindow::refresh() {
 
   const int scale = scale_->currentIndex() + 1;
   if (scale == 1) {
-    setNote(scaleNote_, QStringLiteral("Native Xbox 360 rendering resolution."));
+    setNote(scaleNote_, QStringLiteral("Xbox 360 rendering resolution, 1280 × 720."));
   } else {
     setNote(scaleNote_,
-            QStringLiteral("%1× width and height · %2× the pixels and GPU work.")
-                .arg(scale)
+            QStringLiteral("Drawn at %1 × %2 (%3× the pixels): sharper, much smoother edges "
+                           "(supersampling on top of the game's 4× MSAA).")
+                .arg(1280 * scale)
+                .arg(720 * scale)
                 .arg(scale * scale),
             "hot");
   }
@@ -921,7 +836,6 @@ void LauncherWindow::refresh() {
   sharpnessValue_->setText(QStringLiteral("%1%").arg(sharpness_->value()));
 
   refreshGameStatus();
-  refreshCache();
 
   if (!QFileInfo::exists(gameExe_)) {
     status_->setText(QStringLiteral("nfsmw.exe was not found next to the launcher."));
@@ -950,27 +864,6 @@ void LauncherWindow::refreshGameStatus() {
     setNote(gameNote_, QStringLiteral("Not found, or not an ISO / folder with default.xex."), "bad");
     hero_->setGameStatus(QStringLiteral("Game not found"), theme::bad());
   }
-}
-
-void LauncherWindow::refreshCache() {
-  const QDir dir(shaderCacheDir());
-  const QString xsh = dir.filePath(QStringLiteral("454107D9.xsh"));
-  if (!QFileInfo::exists(xsh)) {
-    setNote(cacheNote_, QStringLiteral("Shader cache is empty. It fills while you play; the first "
-                                       "run stutters whenever something new is drawn."));
-    hero_->setCacheStatus(QStringLiteral("Shader cache empty"));
-    return;
-  }
-  qint64 bytes = 0;
-  for (const QFileInfo& f : dir.entryInfoList({QStringLiteral("454107D9.*")}, QDir::Files)) {
-    bytes += f.size();
-  }
-  const int n = countShaders(xsh);
-  setNote(cacheNote_, QStringLiteral("%1 shaders cached (%2 KB). They are precompiled at every "
-                                     "start; only new ones stutter once.")
-                          .arg(n)
-                          .arg(bytes / 1024));
-  hero_->setCacheStatus(QStringLiteral("%1 shaders cached").arg(n));
 }
 
 // ===========================================================================
@@ -1031,26 +924,6 @@ void LauncherWindow::showCommandLine() {
   });
   connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
   dlg.exec();
-}
-
-void LauncherWindow::openShaderCache() {
-  const QString dir = shaderCacheDir();
-  QDir().mkpath(dir);
-  QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
-}
-
-void LauncherWindow::clearShaderCache() {
-  if (QMessageBox::question(this, QStringLiteral("Clear shader cache"),
-                            QStringLiteral("Delete the NFS Most Wanted shader cache?\n\nThe next "
-                                           "run will stutter again until playing rebuilds it.")) !=
-      QMessageBox::Yes) {
-    return;
-  }
-  const QDir dir(shaderCacheDir());
-  for (const QString& f : dir.entryList({QStringLiteral("454107D9.*")}, QDir::Files)) {
-    QFile::remove(dir.filePath(f));
-  }
-  refresh();
 }
 
 QString LauncherWindow::resolveGameDir(const QString& input) {

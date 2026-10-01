@@ -56,6 +56,12 @@ REXCVAR_DEFINE_BOOL(native_renderer_skip_emulation, true, "Debug",
                     "native renderer delivers frames (false = both draw, for comparing)");
 REXCVAR_DEFINE_BOOL(native_renderer_window, false, "Debug",
                     "With native_renderer: also show the native picture in a second window");
+REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
+                     "With native_renderer: draw the frames at this multiple of 1280x720 "
+                     "(1-4, supersampling)");
+REXCVAR_DEFINE_INT32(native_renderer_anisotropic, -1, "Debug",
+                     "With native_renderer: anisotropic filtering forced on textures with "
+                     "linear filtering and mips (0 off, 1-5 = 1x-16x; -1 = the game's)");
 
 using namespace rex::graphics;
 using replay::GuestToPhysical;
@@ -630,7 +636,9 @@ void Parallel::Thread() {
   ShowWindow(window, SW_SHOWNOACTIVATE);
   }
 
-  replay::Renderer renderer;
+  const uint32_t scale = uint32_t(std::clamp(REXCVAR_GET(native_renderer_scale), 1, 4));
+  replay::Renderer renderer(scale);
+  renderer.SetAnisotropicOverride(REXCVAR_GET(native_renderer_anisotropic));
   auto* kernel = rex::system::kernel_state();
   const uint8_t* physical = kernel->memory()->physical_membase();
   if (!renderer.Initialize()) {
@@ -644,11 +652,11 @@ void Parallel::Thread() {
   if (window && !renderer.CreateWindowOutput(window)) {
     REXLOG_ERROR("[native renderer] window output failed");
   }
-  if (!renderer.CreateSharedOutput(1280, 720)) {
+  if (!renderer.CreateSharedOutput(1280 * scale, 720 * scale)) {
     REXLOG_ERROR("[native renderer] shared output for the game's window failed");
   }
   renderer_ = &renderer;
-  REXLOG_INFO("[native renderer] running");
+  REXLOG_INFO("[native renderer] running at {}x{} ({}x)", 1280 * scale, 720 * scale, scale);
 
   auto last_log = std::chrono::steady_clock::now();
   double render_ms = 0;

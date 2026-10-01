@@ -26,7 +26,7 @@ class LauncherWindow final : public QMainWindow {
   // Paths.
   void locate();
   QString isoCacheDir(const QString& iso) const;
-  static QString shaderCacheDir();
+
 
   // UI.
   QWidget* buildContent();
@@ -35,7 +35,6 @@ class LauncherWindow final : public QMainWindow {
   void resetAdvanced();
   void refresh();
   void refreshGameStatus();
-  void refreshCache();
   void setNote(QLabel* label, const QString& text, const char* state = "");
 
   // Settings.
@@ -52,8 +51,6 @@ class LauncherWindow final : public QMainWindow {
   void pickIso();
   void pickFolder();
   void showCommandLine();
-  void openShaderCache();
-  void clearShaderCache();
   QString resolveGameDir(const QString& input);
   void play();
   void onGameFinished(int exitCode, QProcess::ExitStatus status);
@@ -87,16 +84,11 @@ class LauncherWindow final : public QMainWindow {
   QLabel* fpsNote_ = nullptr;
   ToggleSwitch* vsync_ = nullptr;
 
-  Segmented* aa_ = nullptr;
   Segmented* aniso_ = nullptr;
   Segmented* filter_ = nullptr;
   QSlider* sharpness_ = nullptr;
   QLabel* sharpnessValue_ = nullptr;
 
-  Segmented* api_ = nullptr;
-  Segmented* edram_ = nullptr;
-  ToggleSwitch* asyncShaders_ = nullptr;
-  QLabel* cacheNote_ = nullptr;
 
   // Advanced tab.
   ToggleSwitch* pacingAtGuest_ = nullptr;
@@ -105,9 +97,6 @@ class LauncherWindow final : public QMainWindow {
   QSpinBox* smoothMs_ = nullptr;
   Segmented* displayLock_ = nullptr;
   ToggleSwitch* presentPerFrame_ = nullptr;
-  ToggleSwitch* textureHeaps_ = nullptr;
-  QSpinBox* textureSoft_ = nullptr;
-  QSpinBox* textureHard_ = nullptr;
   ToggleSwitch* logStats_ = nullptr;
   ToggleSwitch* logBreakdown_ = nullptr;
 
