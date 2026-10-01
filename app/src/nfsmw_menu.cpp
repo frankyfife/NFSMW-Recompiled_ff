@@ -460,6 +460,19 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
                        "switch it off and the normal progress is back.");
     ImGui::Spacing();
 
+    if (ExisteCvar("freecam")) {
+      bool libre = CvarB("freecam");
+      if (ImGui::Checkbox("Free camera (F6)", &libre)) {
+        SetCvarB("freecam", libre);
+      }
+      MarcaVivo("(applies instantly)");
+      ImGui::TextColored(ImColor(kTextoAtenuado),
+                         "The game's debug world camera. Move: WASD / left stick. Look: arrow "
+                         "keys / right stick. Up and down: E and Q / triggers. Faster: Space or "
+                         "Backspace / A or B. The car gets no input meanwhile.");
+      ImGui::Spacing();
+    }
+
     if (ExisteCvar("grant_user_privileges")) {
       bool gp = CvarB("grant_user_privileges");
       if (ImGui::Checkbox("User privileges (online access)", &gp)) {

@@ -82,6 +82,11 @@ src/audio/xma_context.cpp, include/rex/audio/xma/context.h
     lee bloques que el decodificador aun no ha escrito. La primera vez son
     ceros; tras dar la vuelta eran el sonido anterior (motor) delante de los
     clics del menu. MEDIDO: 20 de 20 clics limpios, 45 ms, con la rueda dada.
+src/kernel/xam/xam_input.cpp
+    XamInputGetState pasa cada estado del mando (botones, gatillos, sticks) por
+    NfsmwInputFilter del ejecutable si existe: con la camara libre del juego
+    (app/src/freecam.cpp) la camara se queda la entrada y el juego no recibe
+    nada mientras tanto.
 src/ui/window_sdl.cpp
     Una ventana que no cabe en la pantalla (1920x1080 logicos al 225 % son
     4320x2430 pixeles en una de 3840x2160) se abre a lo sumo al 90 % del area
@@ -734,6 +739,14 @@ BLOQUES = [
      'xma/context.h #1',
      '  bool carry_valid_ = false;\n  uint8_t pending_output_limit_ = 0;\n',
      "  bool carry_valid_ = false;\n  // The new stream's output buffer was silenced since the context was\n  // cleared (see Work).\n  bool output_cleared_since_clear_ = false;\n  uint8_t pending_output_limit_ = 0;\n"),
+    ('src/kernel/xam/xam_input.cpp',
+     'xam/xam_input.cpp #1',
+     '\n#include <rex/input/input.h>\n',
+     '\n#if defined(_WIN32)\n#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n#include <windows.h>\n#endif\n#include <rex/input/input.h>\n'),
+    ('src/kernel/xam/xam_input.cpp',
+     'xam/xam_input.cpp #2',
+     '  auto* is = input_system();\n  return is->GetState(actual_user_index, input_state);\n}\n',
+     '  auto* is = input_system();\n  const X_RESULT result = is->GetState(actual_user_index, input_state);\n  // PARCHE LOCAL - free camera (NFSMW app/src/freecam.cpp): the game\'s\n  // executable sees every state first (buttons, triggers, sticks) and may\n  // change it; with its free camera on, the camera takes the input and the\n  // game gets none.\n#if defined(_WIN32)\n  using InputFilter = void (*)(uint32_t user_index, int16_t* values);\n  static const InputFilter input_filter = reinterpret_cast<InputFilter>(\n      GetProcAddress(GetModuleHandleW(nullptr), "NfsmwInputFilter"));\n  if (input_filter && result == X_ERROR_SUCCESS && input_state) {\n    auto& pad = input_state->gamepad;\n    int16_t values[7] = {int16_t(uint16_t(pad.buttons)), int16_t(pad.left_trigger),\n                         int16_t(pad.right_trigger),      int16_t(pad.thumb_lx),\n                         int16_t(pad.thumb_ly),           int16_t(pad.thumb_rx),\n                         int16_t(pad.thumb_ry)};\n    input_filter(actual_user_index, values);\n    pad.buttons = uint16_t(values[0]);\n    pad.left_trigger = uint8_t(values[1]);\n    pad.right_trigger = uint8_t(values[2]);\n    pad.thumb_lx = values[3];\n    pad.thumb_ly = values[4];\n    pad.thumb_rx = values[5];\n    pad.thumb_ry = values[6];\n  }\n#endif\n  return result;\n}\n'),
 ]
 
 

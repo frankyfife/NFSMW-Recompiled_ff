@@ -2,7 +2,7 @@
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
-# G(as held, count = seconds; V/T hold W/arrow up).
+# G(as held, count = seconds; V/T/Y/N hold W/arrow up/D/arrow right), F = F6 (free camera).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -13,6 +13,7 @@ public static class G4 {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint type);
   delegate bool EnumProc(IntPtr h, IntPtr p);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr p);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -38,7 +39,7 @@ public static class G4 {
 if (-not [G4]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [G4]::SetProcessDPIAware() | Out-Null }
 # S = Space (A button), B = Backspace (B button), H/J/K/M = stick left/right/up/down (A/D/W/S keys)
 $vk = @{ 'E' = 0x0D; 'L' = 0x25; 'R' = 0x27; 'U' = 0x26; 'D' = 0x28; 'S' = 0x20; 'X' = 0x1B;
-         'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53 }
+         'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53; 'F' = 0x75 }
 $b = "D:\NFSMW\NFSMW-Recompiled_ff\build"
 $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }
@@ -70,15 +71,18 @@ foreach ($step in $Keys.Split(',')) {
   $k = $m.Groups[1].Value; $n = if ($m.Groups[2].Value) { [int]$m.Groups[2].Value } else { 1 }
   $gap = if ($m.Groups[3].Value) { [int]$m.Groups[3].Value } else { 1800 }
   if ($k -eq 'W') { Start-Sleep -Seconds $n; continue }
-  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26 }
+  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27 }
   if ($hold.ContainsKey($k)) {
     # Held for n seconds: G = gas (right trigger, O key), V = W key (left
     # stick up), T = arrow up.
     [G4]::SetForegroundWindow($h) | Out-Null
     Start-Sleep -Milliseconds 100
-    [G4]::keybd_event([byte]$hold[$k], 0, 0, [UIntPtr]::Zero)
+    # Arrow keys are extended keys (without the flag they arrive as the keypad).
+    $ext = if ($hold[$k] -ge 0x21 -and $hold[$k] -le 0x28) { 1 } else { 0 }
+    $scan = [byte][G4]::MapVirtualKey([uint32]$hold[$k], 0)
+    [G4]::keybd_event([byte]$hold[$k], $scan, $ext, [UIntPtr]::Zero)
     Start-Sleep -Seconds $n
-    [G4]::keybd_event([byte]$hold[$k], 0, 2, [UIntPtr]::Zero)
+    [G4]::keybd_event([byte]$hold[$k], $scan, 2 -bor $ext, [UIntPtr]::Zero)
     continue
   }
   if ($k -eq 'P') { Shot; continue }

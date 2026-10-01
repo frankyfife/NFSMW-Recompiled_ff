@@ -266,6 +266,14 @@ class NfsmwApp : public rex::ReXApp {
     rex::ui::RegisterBind("bind_nfsmw_menu", "Escape",
                           "Open/close the game settings menu",
                           [this] { AlternarMenu(); });
+    // Free camera (src/freecam.cpp): the game's debug world camera.
+    rex::ui::RegisterBind("bind_freecam", "F6", "Free camera on/off", [] {
+      if (rex::cvar::GetFlagInfo("freecam") == nullptr) {
+        return;
+      }
+      const bool on = rex::cvar::GetFlagByName("freecam") == "true";
+      rex::cvar::SetFlagByName("freecam", on ? "false" : "true");
+    });
     // Frame time recording (the presenter writes one CSV per recording into
     // frame_times_dir; the launcher points it at logs\frametimes).
     rex::ui::RegisterBind("bind_record_frametimes", "F10",
@@ -284,6 +292,7 @@ class NfsmwApp : public rex::ReXApp {
     PararVigilante();
     rex::ui::UnregisterBind("bind_nfsmw_menu");
     rex::ui::UnregisterBind("bind_record_frametimes");
+    rex::ui::UnregisterBind("bind_freecam");
     // Close an open recording cleanly.
     if (rex::cvar::GetFlagInfo("frame_times_recording") != nullptr) {
       rex::cvar::SetFlagByName("frame_times_recording", "false");

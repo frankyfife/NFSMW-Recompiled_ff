@@ -52,6 +52,7 @@ FICHEROS = [
     "src/ui/window_sdl.cpp",
     "src/audio/xma_context.cpp",
     "include/rex/audio/xma/context.h",
+    "src/kernel/xam/xam_input.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 

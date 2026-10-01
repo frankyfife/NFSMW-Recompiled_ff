@@ -846,6 +846,18 @@ extern "C" REX_FUNC(sub_825A3AF0) {
     __imp__sub_825A3AF0(ctx, base);
     return;
   }
+  // NFSMW_DUMP_IMAGE=<file>: the loaded game image (0x82000000, 13 MB) once,
+  // for reverse engineering.
+  static bool image_dumped = false;
+  if (!image_dumped) {
+    image_dumped = true;
+    if (const char* path = std::getenv("NFSMW_DUMP_IMAGE")) {
+      if (FILE* out = std::fopen(path, "wb")) {
+        std::fwrite(base + 0x82000000u, 1, 13434880, out);
+        std::fclose(out);
+      }
+    }
+  }
   const uint32_t device = ctx.r3.u32;
   uint32_t before = LoadBE32(base + device);
   t_segment_start = 0;
