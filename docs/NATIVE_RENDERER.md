@@ -385,6 +385,42 @@ roam:
 Profile of the renderer thread: memory comparison of the pages draws read
 (~20 %), the D3D12 driver (~25 %), Draw itself (~10 %).
 
+**Renderer thread speed (2026-10-01):** measured the same way (free roam,
+no frame limit), sampling profiler (`tools/cpuprof`) on the renderer thread
+and the game's main thread:
+
+| step | game swaps/s | frames drawn/s | renderer ms per frame |
+|---|---|---|---|
+| before | 250 | 162 | 6.2 |
+| register changes instead of the whole shadow | 193 | 193 | 4.3 |
+| + texture tables and index ranges kept | 193 | 193 | 3.7 |
+| + inline SSE2 chunk compare on the game thread | 243 | 243 | 3.7 |
+| + the D3D flush's dirty masks for the float constants | 274 | 249 | 3.9 |
+| + bound state not set again | 274-287 | 260-270 | 3.5 |
+
+- Register shadow: every draw recorded all 2401 registers (9.6 KB, ~26 MB
+  a frame copied by the game thread and compared again by the renderer).
+  Now only changed 16-register chunks are recorded (header + values); each
+  frame starts with all of them (the renderer may skip frames). For the
+  vertex and pixel shader float constants (2048 of the 2401) the recorder
+  only looks at the chunks the D3D flush (`sub_825A40C0`, masks at device
+  +16/+24, one bit per 16 registers) writes out; a census hook before that
+  call reads the masks. Resolves write the last chunk themselves, outside
+  the masks, so they compare everything. `NATIVE_VERIFY_DIRTY=1` compares
+  all and logs chunks that changed outside the masks: 0 in menu and free
+  roam.
+- Texture descriptor tables of the same views are made once per heap half
+  (~2100 of ~2700 draws a frame reuse one); the index range of index data
+  whose pages did not change is kept (~2250 reused).
+- The draw does not set state again that the previous draw of the list set
+  (render targets, root signature, pipeline, root arguments, viewport,
+  scissor, blend factor, stencil reference, topology, index buffer).
+- The picture is unchanged (front buffer before/after: 1.5/255, moving
+  clouds and leaves). `NATIVE_SAVE_FRONT=<png>` saves the native front
+  buffer every 300 frames.
+- Left on the renderer thread: mostly the D3D12 driver and Draw itself; on
+  the game thread the recording is ~15 % (was 41 %).
+
 **Dynamic shadows (car shadow), fixed:** for vertex shaders it patches and
 links to the pixel shader (`sub_825A37D8`), the library does not load the
 microcode from an address: it copies the patched program into the command

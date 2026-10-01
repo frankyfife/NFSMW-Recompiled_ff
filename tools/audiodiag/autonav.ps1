@@ -1,4 +1,4 @@
-﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed)
+﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60)
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture).
@@ -43,7 +43,7 @@ $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }
 $log = "$env:TEMP\claude\nav_$Name.log"
 $a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', "--fullscreen=$(-not $Windowed)".ToLower(),
-       '--resolution', '720p', '--guest_vblank_rate=1000', '--frame_pacing_fps=60',
+       '--resolution', '720p', '--guest_vblank_rate=1000', "--frame_pacing_fps=$Fps",
        '--readback_resolve=fast', '--mnk_mode=true', '--log_guest_fps=true', '--audio_mute=true',
        "--audio_dump_file=$dump", '--log_file', $log) + $Extra
 $p = Start-Process "$b\nfsmw.exe" -ArgumentList $a -WorkingDirectory $b -PassThru

@@ -245,9 +245,16 @@ bool CaptureFrameActive() {
 bool NativeRendererEnabled();
 void NativeRendererRecord(int entry, const uint32_t* args, uint32_t result, uint8_t* base);
 void NativeRendererSwapDone();
+void NativeRendererBefore(int entry, const uint32_t* args, uint8_t* base);
 
 // Whether the D3D hooks hand their calls to RenderCaptureCall.
 bool RenderCaptureActive() { return CaptureFrameActive() || NativeRendererEnabled(); }
+
+void RenderCaptureBefore(int entry, const uint32_t* args, uint8_t* base) {
+  if (NativeRendererEnabled()) {
+    NativeRendererBefore(entry, args, base);
+  }
+}
 
 void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint32_t result,
                        uint8_t* base) {

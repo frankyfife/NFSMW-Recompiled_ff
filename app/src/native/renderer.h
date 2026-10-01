@@ -74,6 +74,8 @@ struct SharedFrame {
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
+  uint32_t texture_tables_reused = 0;
+  uint32_t index_ranges_reused = 0;
   uint32_t shader_failures = 0;  // microcode the analysis could not take
   uint32_t occlusion_reports = 0;
   uint64_t occlusion_samples = 0;
@@ -232,6 +234,7 @@ class Renderer {
   D3D12_GPU_DESCRIPTOR_HANDLE shared_memory_table_{};
   // Sampler descriptor ranges by their parameters.
   std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> sampler_ranges_;
+  std::unordered_map<uint64_t, D3D12_GPU_DESCRIPTOR_HANDLE> texture_ranges_;
 
   rex::graphics::DxbcShaderTranslator translator_;
   rex::string::StringBuffer disasm_;
@@ -248,14 +251,20 @@ class Renderer {
   ComPtr<ID3D12PipelineState> resolve_color_[2][2];  // [msaa][format r8g8b8a8 / r32f]
   ComPtr<ID3D12PipelineState> resolve_depth_[2];      // [msaa] -> r32f
 
-  bool Readable(uint32_t address, uint32_t size) const;
+  bool Readable(uint32_t address, uint32_t size);
   void SyncGuestRange(uint32_t address, uint32_t size);
   void SyncDrawData(const DrawCall& d, const rex::graphics::DxbcShader& vertex_shader);
   static constexpr uint32_t kLivePage = 4096;
   bool live_ = false;
   std::unique_ptr<uint8_t[]> live_copy_;
   std::vector<uint64_t> page_synced_frame_;
-  mutable std::vector<uint64_t> page_readable_frame_;
+  std::vector<uint64_t> page_changed_frame_;  // last frame a page's data changed
+  struct IndexRange {
+    uint32_t min = 0, max = 0;
+    uint64_t frame = 0;  // when it was measured
+  };
+  std::unordered_map<uint64_t, IndexRange> index_ranges_;
+  std::vector<uint64_t> page_readable_frame_;
   uint64_t frame_ = 0;
   // Resources replaced while the GPU may still use them; freed at Flush.
   std::vector<ComPtr<ID3D12Resource>> release_after_flush_;
@@ -265,6 +274,27 @@ class Renderer {
   D3D12_CPU_DESCRIPTOR_HANDLE back_buffer_rtvs_[2] = {};
   ComPtr<ID3D12RootSignature> present_root_signature_;
   ComPtr<ID3D12PipelineState> present_pipeline_;
+  // Graphics state set on the open list by the last draw; reset by a new
+  // list and by anything else that records graphics state.
+  struct BoundState {
+    bool valid = false;
+    ID3D12RootSignature* root = nullptr;
+    ID3D12PipelineState* pipeline = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = {};
+    uint32_t rtv_count = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = {};
+    D3D12_GPU_VIRTUAL_ADDRESS cbvs[5] = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE shared_memory_table = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE tables[4] = {};
+    D3D12_VIEWPORT viewport = {};
+    D3D12_RECT scissor = {};
+    float blend_factor[4] = {};
+    uint32_t stencil_ref = 0;
+    D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    D3D12_INDEX_BUFFER_VIEW index_view = {};
+  };
+  BoundState bound_;
+  void InvalidateBound() { bound_ = BoundState{}; }
   HWND window_ = nullptr;
   ShaderFailure last_shader_failure_;
 

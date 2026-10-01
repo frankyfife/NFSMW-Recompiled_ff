@@ -569,6 +569,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Renderer::AllocateViews(uint32_t count,
 }
 
 bool Renderer::BeginList() {
+  InvalidateBound();
   if (!list_open_) {
     allocator_->Reset();
     list_->Reset(allocator_.Get(), nullptr);
@@ -608,6 +609,7 @@ void Renderer::ActivateSet(uint32_t index) {
   sampler_heap_end_ = sampler_heap_begin_ + kSamplerHeapSize / 2;
   sampler_heap_used_ = sampler_heap_begin_;
   sampler_ranges_.clear();
+  texture_ranges_.clear();
 }
 
 bool Renderer::Submit() { return Submit(false); }
@@ -1440,10 +1442,18 @@ void Renderer::Draw(const DrawCall& d) {
   auto fetch_words = [&](uint32_t index) {
     return &regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 6 * index];
   };
+  // Tables of the same views (most draws in a row use the same textures) are
+  // made once per descriptor heap half: creating views is a driver call.
   auto bind_textures = [&](const DxbcShader& shader) -> D3D12_GPU_DESCRIPTOR_HANDLE {
     const auto& bindings = shader.GetTextureBindingsAfterTranslation();
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu;
-    D3D12_GPU_DESCRIPTOR_HANDLE gpu = AllocateViews(uint32_t(bindings.size()), cpu);
+    struct View {
+      ID3D12Resource* resource;  // null: a null view
+      D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+      D3D12_CPU_DESCRIPTOR_HANDLE null_view;
+    };
+    View views[64];
+    uint32_t view_count = 0;
+    uint64_t key = 1469598103934665603ull;
     for (const auto& binding : bindings) {
       const uint32_t* words = fetch_words(binding.fetch_constant);
       xenos::xe_gpu_texture_fetch_t fetch;
@@ -1475,15 +1485,36 @@ void Renderer::Draw(const DrawCall& d) {
           srv.Texture2DArray.MipLevels = texture->mips;
           srv.Texture2DArray.ArraySize = texture->array_size;
         }
-        device_->CreateShaderResourceView(texture->resource.Get(), &srv, cpu);
+        views[view_count] = {texture->resource.Get(), srv, {}};
       } else {
-        device_->CopyDescriptorsSimple(1, cpu,
-                                       cube ? null_srv_cube_
-                                            : (volume ? null_srv_3d_ : null_srv_2d_array_),
-                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        views[view_count] = {
+            nullptr, {}, cube ? null_srv_cube_ : (volume ? null_srv_3d_ : null_srv_2d_array_)};
+      }
+      const View& v = views[view_count];
+      key = (key ^ reinterpret_cast<uintptr_t>(v.resource)) * 1099511628211ull;
+      key = (key ^ HashBytes(&v.srv, sizeof(v.srv))) * 1099511628211ull;
+      key = (key ^ v.null_view.ptr) * 1099511628211ull;
+      if (++view_count == std::size(views)) {
+        break;
+      }
+    }
+    auto known = texture_ranges_.find(key);
+    if (known != texture_ranges_.end()) {
+      ++stats_.texture_tables_reused;
+      return known->second;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu = AllocateViews(uint32_t(bindings.size()), cpu);
+    for (uint32_t i = 0; i < view_count; ++i) {
+      const View& v = views[i];
+      if (v.resource) {
+        device_->CreateShaderResourceView(v.resource, &v.srv, cpu);
+      } else {
+        device_->CopyDescriptorsSimple(1, cpu, v.null_view, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       }
       cpu.ptr += view_increment_;
     }
+    texture_ranges_.emplace(key, gpu);
     return gpu;
   };
   auto bind_samplers = [&](const DxbcShader& shader) -> D3D12_GPU_DESCRIPTOR_HANDLE {
@@ -1639,10 +1670,7 @@ void Renderer::Draw(const DrawCall& d) {
   }
   // In the running game: upload what the draw reads that changed.
   if (live_) {
-    const auto start = std::chrono::steady_clock::now();
     SyncDrawData(d, vs_shader);
-    stats_.sync_ms += std::chrono::duration<double, std::milli>(
-                          std::chrono::steady_clock::now() - start).count();
   }
 
   // Record.
@@ -1662,34 +1690,82 @@ void Renderer::Draw(const DrawCall& d) {
   if (depth) {
     Transition(depth->resource.Get(), depth->state, D3D12_RESOURCE_STATE_DEPTH_WRITE);
   }
-  list_->OMSetRenderTargets(color_count, color_count ? rtvs : nullptr, FALSE,
-                            depth ? &depth->view : nullptr);
-  list_->SetGraphicsRootSignature(root);
-  list_->SetPipelineState(pipeline->state.Get());
-  list_->SetGraphicsRootConstantBufferView(kRootFetchConstants, cb_fetch);
-  list_->SetGraphicsRootConstantBufferView(kRootFloatConstantsVertex, cb_float_vs);
-  list_->SetGraphicsRootConstantBufferView(kRootFloatConstantsPixel, cb_float_ps);
-  list_->SetGraphicsRootConstantBufferView(kRootSystemConstants, cb_system);
-  list_->SetGraphicsRootConstantBufferView(kRootBoolLoopConstants, cb_bool_loop);
-  list_->SetGraphicsRootDescriptorTable(kRootSharedMemory, shared_memory_table_);
+  // State the previous draw of this list set already is not set again (the
+  // driver calls are most of the renderer thread's time).
+  BoundState& b = bound_;
+  const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth ? depth->view : D3D12_CPU_DESCRIPTOR_HANDLE{};
+  bool targets_same = b.valid && b.rtv_count == color_count && b.dsv.ptr == dsv.ptr;
+  for (uint32_t i = 0; targets_same && i < color_count; ++i) {
+    targets_same = b.rtvs[i].ptr == rtvs[i].ptr;
+  }
+  if (!targets_same) {
+    list_->OMSetRenderTargets(color_count, color_count ? rtvs : nullptr, FALSE,
+                              depth ? &depth->view : nullptr);
+    b.rtv_count = color_count;
+    std::copy(rtvs, rtvs + color_count, b.rtvs);
+    b.dsv = dsv;
+  }
+  if (!b.valid || b.root != root) {
+    list_->SetGraphicsRootSignature(root);
+    b.root = root;
+    // A new root signature leaves all root arguments unset.
+    std::fill(std::begin(b.cbvs), std::end(b.cbvs), D3D12_GPU_VIRTUAL_ADDRESS(0));
+    std::fill(std::begin(b.tables), std::end(b.tables), D3D12_GPU_DESCRIPTOR_HANDLE{});
+    b.shared_memory_table = {};
+  }
+  if (!b.valid || b.pipeline != pipeline->state.Get()) {
+    list_->SetPipelineState(pipeline->state.Get());
+    b.pipeline = pipeline->state.Get();
+  }
+  const D3D12_GPU_VIRTUAL_ADDRESS cbvs[5] = {cb_fetch, cb_float_vs, cb_float_ps, cb_system,
+                                             cb_bool_loop};
+  const UINT cbv_roots[5] = {kRootFetchConstants, kRootFloatConstantsVertex,
+                             kRootFloatConstantsPixel, kRootSystemConstants,
+                             kRootBoolLoopConstants};
+  for (uint32_t i = 0; i < 5; ++i) {
+    if (b.cbvs[i] != cbvs[i]) {
+      list_->SetGraphicsRootConstantBufferView(cbv_roots[i], cbvs[i]);
+      b.cbvs[i] = cbvs[i];
+    }
+  }
+  if (b.shared_memory_table.ptr != shared_memory_table_.ptr) {
+    list_->SetGraphicsRootDescriptorTable(kRootSharedMemory, shared_memory_table_);
+    b.shared_memory_table = shared_memory_table_;
+  }
   for (uint32_t i = 0; i < table_count; ++i) {
-    list_->SetGraphicsRootDescriptorTable(kRootBaseCount + i, tables[i]);
+    if (b.tables[i].ptr != tables[i].ptr) {
+      list_->SetGraphicsRootDescriptorTable(kRootBaseCount + i, tables[i]);
+      b.tables[i] = tables[i];
+    }
   }
   D3D12_VIEWPORT vp = {float(viewport.xy_offset[0]), float(viewport.xy_offset[1]),
                        float(viewport.xy_extent[0]), float(viewport.xy_extent[1]), viewport.z_min,
                        viewport.z_max};
-  list_->RSSetViewports(1, &vp);
+  if (!b.valid || std::memcmp(&b.viewport, &vp, sizeof(vp))) {
+    list_->RSSetViewports(1, &vp);
+    b.viewport = vp;
+  }
   draw_util::Scissor scissor;
   draw_util::GetScissor(regs, scissor);
   D3D12_RECT rect = {LONG(scissor.offset[0]), LONG(scissor.offset[1]),
                      LONG(scissor.offset[0] + scissor.extent[0]),
                      LONG(scissor.offset[1] + scissor.extent[1])};
-  list_->RSSetScissorRects(1, &rect);
+  if (!b.valid || std::memcmp(&b.scissor, &rect, sizeof(rect))) {
+    list_->RSSetScissorRects(1, &rect);
+    b.scissor = rect;
+  }
   const float blend_factor[4] = {
       regs.Get<float>(XE_GPU_REG_RB_BLEND_RED), regs.Get<float>(XE_GPU_REG_RB_BLEND_GREEN),
       regs.Get<float>(XE_GPU_REG_RB_BLEND_BLUE), regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA)};
-  list_->OMSetBlendFactor(blend_factor);
-  list_->OMSetStencilRef(regs.Get<reg::RB_STENCILREFMASK>().stencilref);
+  if (!b.valid || std::memcmp(b.blend_factor, blend_factor, sizeof(blend_factor))) {
+    list_->OMSetBlendFactor(blend_factor);
+    std::memcpy(b.blend_factor, blend_factor, sizeof(blend_factor));
+  }
+  const uint32_t stencil_ref = regs.Get<reg::RB_STENCILREFMASK>().stencilref;
+  if (!b.valid || b.stencil_ref != stencil_ref) {
+    list_->OMSetStencilRef(stencil_ref);
+    b.stencil_ref = stencil_ref;
+  }
   // REPLAY_TRACE=first-last: draw state of these sequence numbers.
   static int trace_first = -1, trace_last = -1;
   if (trace_first < 0) {
@@ -1741,11 +1817,21 @@ void Renderer::Draw(const DrawCall& d) {
                   ib[10] << 8 | ib[11]);
     }
   }
-  list_->IASetPrimitiveTopology(prim == xenos::PrimitiveType::kTriangleStrip
-                                    ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
-                                    : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  const D3D_PRIMITIVE_TOPOLOGY topology = prim == xenos::PrimitiveType::kTriangleStrip
+                                              ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
+                                              : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+  if (!b.valid || b.topology != topology) {
+    list_->IASetPrimitiveTopology(topology);
+    b.topology = topology;
+  }
+  b.valid = true;
   if (use_indices) {
-    list_->IASetIndexBuffer(&index_view);
+    if (b.index_view.BufferLocation != index_view.BufferLocation ||
+        b.index_view.Format != index_view.Format ||
+        b.index_view.SizeInBytes != index_view.SizeInBytes) {
+      list_->IASetIndexBuffer(&index_view);
+      b.index_view = index_view;
+    }
     list_->DrawIndexedInstanced(host_count, 1, 0, 0, 0);
   } else {
     list_->DrawInstanced(host_count, 1, 0, 0);
@@ -1754,6 +1840,7 @@ void Renderer::Draw(const DrawCall& d) {
 }
 
 void Renderer::Resolve(const ResolveCall& r) {
+  InvalidateBound();
   const rex::graphics::RegisterFile& regs = *r.regs;
   if (view_heap_used_ + 16 > view_heap_end_) {
     Flush();
@@ -2000,6 +2087,7 @@ bool Renderer::UseLiveGuestMemory(const uint8_t* physical_memory) {
     return false;
   }
   page_synced_frame_.assign(kSharedMemorySize / kLivePage, 0);
+  page_changed_frame_.assign(kSharedMemorySize / kLivePage, 0);
   page_readable_frame_.assign(kSharedMemorySize / kLivePage, 0);
   live_ = true;
   return true;
@@ -2039,7 +2127,7 @@ bool CompareAndCopy(uint8_t* copy, const uint8_t* guest, size_t n, bool* changed
 
 }  // namespace
 
-bool Renderer::Readable(uint32_t address, uint32_t size) const {
+bool Renderer::Readable(uint32_t address, uint32_t size) {
   if (!size || uint64_t(address) + size > kSharedMemorySize) {
     return false;
   }
@@ -2088,6 +2176,7 @@ void Renderer::SyncGuestRange(uint32_t address, uint32_t size) {
       flush();
       continue;
     }
+    page_changed_frame_[page] = frame_;
     if (!run_size) {
       run_start = at;
     }
@@ -2107,14 +2196,40 @@ void Renderer::SyncDrawData(const DrawCall& d, const DxbcShader& vertex_shader) 
     if (!Readable(d.index_address, index_bytes)) {
       return;
     }
-    min_index = UINT32_MAX;
-    max_index = 0;
-    const uint8_t* p = guest_memory_ + d.index_address;
-    for (uint32_t i = 0; i < d.vertex_count; ++i) {
-      const uint32_t index =
-          d.index_32bit ? LoadBE32(p + 4 * i) : (uint32_t(p[2 * i]) << 8) | p[2 * i + 1];
-      min_index = std::min(min_index, index);
-      max_index = std::max(max_index, index);
+    // The index range of the same indices is kept while their pages do not
+    // change (most index buffers are static).
+    const uint64_t key = (uint64_t(d.index_address) << 32) | (uint64_t(d.vertex_count) << 1) |
+                         uint64_t(d.index_32bit);
+    if (index_ranges_.size() > (1u << 18)) {
+      index_ranges_.clear();  // dynamic index buffers leave many stale entries
+    }
+    IndexRange& range = index_ranges_[key];
+    bool known = range.frame != 0;
+    if (known && !(live_ && range.frame == frame_)) {
+      for (uint32_t page = d.index_address / kLivePage,
+                    last = (d.index_address + index_bytes - 1) / kLivePage;
+           page <= last; ++page) {
+        if (!live_ || page_changed_frame_[page] >= range.frame) {
+          known = false;
+          break;
+        }
+      }
+    }
+    if (known) {
+      min_index = range.min;
+      max_index = range.max;
+      ++stats_.index_ranges_reused;
+    } else {
+      min_index = UINT32_MAX;
+      max_index = 0;
+      const uint8_t* p = guest_memory_ + d.index_address;
+      for (uint32_t i = 0; i < d.vertex_count; ++i) {
+        const uint32_t index =
+            d.index_32bit ? LoadBE32(p + 4 * i) : (uint32_t(p[2 * i]) << 8) | p[2 * i + 1];
+        min_index = std::min(min_index, index);
+        max_index = std::max(max_index, index);
+      }
+      range = {min_index, max_index, frame_};
     }
     if (min_index > max_index) {
       return;
@@ -2225,6 +2340,7 @@ bool Renderer::CreateWindowOutput(HWND window) {
 }
 
 bool Renderer::Present(uint32_t front_buffer_base) {
+  InvalidateBound();
   auto it = resolved_.find(front_buffer_base);
   if (!swap_chain_ || it == resolved_.end() || !it->second) {
     return Flush();
@@ -2311,6 +2427,7 @@ bool Renderer::CreateSharedOutput(uint32_t width, uint32_t height) {
 }
 
 bool Renderer::PresentToShared(uint32_t front_buffer_base) {
+  InvalidateBound();
   auto it = resolved_.find(front_buffer_base);
   if (!shared_fence_ || it == resolved_.end() || !it->second) {
     return Flush();

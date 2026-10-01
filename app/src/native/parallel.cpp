@@ -16,6 +16,9 @@
 // memory (a D3D12 heap opened on it), while the game goes on: data the game
 // changes in between can show up as glitches in the second window.
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -30,6 +33,7 @@
 #include <vector>
 
 #include <windows.h>
+#include <emmintrin.h>
 
 #include <rex/cvar.h>
 #include <rex/graphics/format/ucode.h>
@@ -70,6 +74,44 @@ constexpr ShadowGroup kShadowGroups[] = {
     {0x4800, 192, 1152},  {0x4900, 40, 10112},
 };
 constexpr uint32_t kShadowCount = 16 + 21 + 5 + 12 + 21 + 38 + 8 + 1024 + 1024 + 192 + 40;
+// The shadow is recorded as changes: chunks of up to kChunk registers (one
+// cache line) that differ from the previous draw, as a header (offset in the
+// flat shadow | count << 16) and the values.
+constexpr uint32_t kChunk = 16;
+
+// Whether two chunks of the shadow are equal: inline SSE2, a library memcmp
+// call per 64 bytes cost the game thread more than copying everything.
+inline bool ChunkEqual(const uint8_t* a, const uint8_t* b, uint32_t bytes) {
+  __m128i diff = _mm_setzero_si128();
+  uint32_t i = 0;
+  for (; i + 16 <= bytes; i += 16) {
+    diff = _mm_or_si128(diff, _mm_xor_si128(_mm_loadu_si128(reinterpret_cast<const __m128i*>(a + i)),
+                                            _mm_loadu_si128(reinterpret_cast<const __m128i*>(b + i))));
+  }
+  bool equal = _mm_movemask_epi8(_mm_cmpeq_epi8(diff, _mm_setzero_si128())) == 0xFFFF;
+  for (; i < bytes; i += 4) {
+    uint32_t x, y;
+    std::memcpy(&x, a + i, 4);
+    std::memcpy(&y, b + i, 4);
+    equal &= x == y;
+  }
+  return equal;
+}
+
+// Register index of each dword of the flat shadow (kShadowGroups in order).
+const std::array<uint16_t, kShadowCount>& ShadowRegisters() {
+  static const std::array<uint16_t, kShadowCount> table = [] {
+    std::array<uint16_t, kShadowCount> t = {};
+    uint32_t flat = 0;
+    for (const ShadowGroup& g : kShadowGroups) {
+      for (uint32_t i = 0; i < g.count; ++i) {
+        t[flat++] = uint16_t(g.first_register + i);
+      }
+    }
+    return t;
+  }();
+  return table;
+}
 constexpr uint32_t kDeviceVertexShader = 12948, kDevicePixelShader = 12944,
                    kDeviceIndexBuffer = 12532;
 constexpr uint32_t kIndirectLoad = 0xC0012700;   // PM4 IM_LOAD, 2 dwords
@@ -77,6 +119,7 @@ constexpr uint32_t kImmediateLoad = 0xC0002B00;  // PM4 IM_LOAD_IMMEDIATE (count
 
 // Entry indices (tools/renderprobe/d3d_layer.json).
 enum : int {
+  kEntryFlush = 82,  // sub_825A40C0: writes the dirty state out before a draw
   kEntryResolve = 10,
   kEntryBeginVertices = 11,
   kEntryDrawVerticesUP = 12,
@@ -90,7 +133,9 @@ struct Item {
   bool occlusion = false;
   uint32_t reports[4] = {};
   uint32_t report_count = 0;
-  uint32_t registers = 0;  // offset of the shadow in Frame::registers
+  // Register changes since the previous draw or resolve: [begin, end) in
+  // Frame::registers.
+  uint32_t registers_begin = 0, registers_end = 0;
   // Draw.
   uint32_t primitive_type = 0, count = 0;
   bool indexed = false;
@@ -108,7 +153,8 @@ struct Item {
 };
 
 struct Frame {
-  std::vector<uint32_t> registers;
+  std::vector<uint32_t> registers;  // register changes (see kChunk)
+  uint32_t registers_pending = 0;   // start of changes no item took yet
   std::vector<uint8_t> code;
   std::vector<Item> items;
   // Microcode already in `code`: (physical address, hash) -> offset.
@@ -120,13 +166,14 @@ struct Frame {
   uint32_t front_buffer = 0;
   void Clear() {
     // Keep the allocations from frame to frame (about 3000 draws).
-    if (registers.capacity() < 3200 * size_t(kShadowCount)) {
-      registers.reserve(3200 * size_t(kShadowCount));
+    if (registers.capacity() < (1u << 20)) {
+      registers.reserve(1u << 20);
     }
     if (items.capacity() < 3200) {
       items.reserve(3200);
     }
     registers.clear();
+    registers_pending = 0;
     code.clear();
     items.clear();
     code_offsets.clear();
@@ -177,6 +224,7 @@ class Parallel {
   }
 
   void Record(int entry, const uint32_t* args, uint32_t result, uint8_t* base);
+  void Before(int entry, const uint32_t* args, uint8_t* base);
   void SwapDone();
   void ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t before, uint32_t after);
   void RecordOcclusion(const uint32_t* addresses, uint32_t count);
@@ -190,6 +238,19 @@ class Parallel {
   uint32_t AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
 
   std::mutex mutex_;  // guards recording_ (game threads)
+  // The shadow as last recorded (big-endian); invalid at the start of a frame,
+  // which then records all of it (the renderer may skip frames).
+  std::array<uint32_t, kShadowCount> last_shadow_ = {};
+  bool last_shadow_valid_ = false;
+  // Dirty masks of the vertex and pixel shader float constants (device +16,
+  // +24; one bit per 16 registers, the highest for the first) that the D3D
+  // flush wrote out since the last recorded item: only those chunks of the
+  // two 1024-register groups can differ from what the GPU had.
+  uint64_t pending_constants_dirty_[2] = {};
+  // NATIVE_VERIFY_DIRTY: also compare all of them, counting changes outside
+  // the masks (should stay 0).
+  bool verify_dirty_ = std::getenv("NATIVE_VERIFY_DIRTY") != nullptr;
+  std::atomic<uint64_t> dirty_missed_{0};
   std::unique_ptr<Frame> recording_ = std::make_unique<Frame>();
   // Last vertex shader IM_LOAD seen, and the device's vertex shader object
   // at that time: only valid while that object is bound. The microcode is
@@ -247,6 +308,18 @@ uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& 
   return offset;
 }
 
+void Parallel::Before(int entry, const uint32_t* args, uint8_t* base) {
+  if (entry != kEntryFlush) {
+    return;
+  }
+  const uint8_t* device = base + args[0];
+  const uint64_t vs = (uint64_t(LoadBE32(device + 16)) << 32) | LoadBE32(device + 20);
+  const uint64_t ps = (uint64_t(LoadBE32(device + 24)) << 32) | LoadBE32(device + 28);
+  std::lock_guard<std::mutex> lock(mutex_);
+  pending_constants_dirty_[0] |= vs;
+  pending_constants_dirty_[1] |= ps;
+}
+
 uint32_t Parallel::AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address,
                                uint64_t hash) {
   auto key = std::make_pair(address, hash);
@@ -275,23 +348,55 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
   std::lock_guard<std::mutex> lock(mutex_);
   Frame& f = *recording_;
   Item item;
-  // The shadow as it is in guest memory (big-endian); the renderer thread
-  // swaps it.
-  item.registers = uint32_t(f.registers.size());
+  // The shadow as it is in guest memory (big-endian; the renderer thread
+  // swaps it), only what changed. Changes of an item that is not recorded
+  // stay pending for the next one.
   const uint8_t* device = base + args[0];
-  f.registers.resize(f.registers.size() + kShadowCount);
-  uint32_t* shadow_out = f.registers.data() + item.registers;
+  uint32_t flat = 0;
+  auto take = [&](const uint8_t* group, uint32_t flat_chunk, uint32_t i, uint32_t n) {
+    uint32_t* last = last_shadow_.data() + flat_chunk;
+    if (!last_shadow_valid_ ||
+        !ChunkEqual(reinterpret_cast<const uint8_t*>(last), group + 4 * i, 4 * n)) {
+      std::memcpy(last, group + 4 * i, 4 * n);
+      f.registers.push_back(flat_chunk | (n << 16));
+      f.registers.insert(f.registers.end(), last, last + n);
+      return true;
+    }
+    return false;
+  };
   for (const ShadowGroup& g : kShadowGroups) {
-    std::memcpy(shadow_out, device + g.device_offset, g.count * 4);
-    shadow_out += g.count;
+    const uint8_t* group = device + g.device_offset;
+    const int constants = g.first_register == 0x4000 ? 0 : (g.first_register == 0x4400 ? 1 : -1);
+    // Resolves (about 25 a frame) write the last chunk of both groups
+    // themselves, outside the masks (NATIVE_VERIFY_DIRTY): compared whole.
+    if (constants >= 0 && last_shadow_valid_ && draw && !verify_dirty_) {
+      // Only the chunks the flush wrote out.
+      for (uint64_t mask = pending_constants_dirty_[constants]; mask;) {
+        const uint32_t chunk = uint32_t(std::countl_zero(mask));
+        mask &= ~(uint64_t(1) << (63 - chunk));
+        take(group, flat + chunk * kChunk, chunk * kChunk, kChunk);
+      }
+    } else {
+      for (uint32_t i = 0; i < g.count; i += kChunk) {
+        const uint32_t n = std::min(kChunk, g.count - i);
+        if (take(group, flat + i, i, n) && constants >= 0 && last_shadow_valid_ &&
+            !(pending_constants_dirty_[constants] & (uint64_t(1) << (63 - i / kChunk)))) {
+          if (draw) {
+            ++dirty_missed_;
+          }
+        }
+      }
+    }
+    flat += g.count;
   }
+  pending_constants_dirty_[0] = pending_constants_dirty_[1] = 0;
+  last_shadow_valid_ = true;
   if (draw) {
     item.primitive_type = args[1];
     if (entry == kEntryDrawIndexed) {
       // (dev, prim, base, start, count); 16-bit indices at index buffer +12.
       const uint32_t index_buffer = LoadBE32(device + kDeviceIndexBuffer);
       if (!index_buffer) {
-        f.registers.resize(item.registers);
         return;
       }
       item.indexed = true;
@@ -328,7 +433,6 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
       const uint32_t vs_address =
           vs_object ? GuestToPhysical(LoadBE32(base + vs_object + 40)) : 0;
       if (!vs_address) {
-        f.registers.resize(item.registers);
         return;
       }
       item.vs_code = AddCode(physical, vs_address, item.vs_dwords, false);
@@ -341,7 +445,6 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
     // Resolve (dev, flags, rect*, texture*, point*, level, slice, ...).
     item.resolve = true;
     if (!args[3]) {
-      f.registers.resize(item.registers);
       return;
     }
     for (int i = 0; i < 6; ++i) {
@@ -361,6 +464,8 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
     item.slice = args[6];
     f.front_buffer = GuestToPhysical(item.dest_fetch[1] & 0xFFFFF000);
   }
+  item.registers_begin = f.registers_pending;
+  item.registers_end = f.registers_pending = uint32_t(f.registers.size());
   f.items.push_back(item);
 }
 
@@ -449,6 +554,7 @@ void Parallel::SwapDone() {
       }
     }
     recording_->Clear();
+    last_shadow_valid_ = false;
   }
   ++frames_recorded_;
   std::lock_guard<std::mutex> handoff(handoff_mutex_);
@@ -549,16 +655,20 @@ void Parallel::Thread() {
       REXLOG_INFO(
           "[native renderer] 10 s: {} frames recorded, {} drawn ({:.1f} ms each), {} dropped | "
           "last frame: {} draws ({} with unpatched vertex shaders), {} skipped ({} shaders unusable so far), "
-          "{} resolves, {} KB "
+          "{} resolves, {} texture tables and {} index ranges reused, {} KB "
           "uploaded, {} occlusion reports ({} samples) | textures loaded {}, "
-          "reloaded {}, unsupported {} | pipelines {}, failed {} | ms: sync {:.1f}, textures {:.1f}, "
+          "reloaded {}, unsupported {} | pipelines {}, failed {} | ms: textures {:.1f}, "
           "GPU wait {:.1f}",
           frames_recorded_.exchange(0), rendered_since_log,
           rendered_since_log ? render_ms / double(rendered_since_log) : 0.0,
           frames_dropped_.exchange(0), s.draws, s.unpatched_vertex_shaders, s.draws_skipped, s.shader_failures,
-          s.resolves, s.bytes_uploaded >> 10, s.occlusion_reports, s.occlusion_samples, s.textures_loaded,
-          s.textures_reloaded, s.textures_unsupported, s.pipelines, s.pipeline_failures, s.sync_ms,
+          s.resolves, s.texture_tables_reused, s.index_ranges_reused, s.bytes_uploaded >> 10, s.occlusion_reports, s.occlusion_samples, s.textures_loaded,
+          s.textures_reloaded, s.textures_unsupported, s.pipelines, s.pipeline_failures,
           s.texture_ms, s.flush_ms);
+      if (verify_dirty_) {
+        REXLOG_INFO("[native renderer] constant chunks changed outside the dirty masks: {}",
+                    dirty_missed_.exchange(0));
+      }
       if (s.shader_failures != shader_failures_logged) {
         shader_failures_logged = s.shader_failures;
         const replay::Renderer::ShaderFailure& bad = renderer.last_shader_failure();
@@ -588,7 +698,7 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     std::memset(file->values, 0, sizeof(file->values));
     return file;
   }();
-  const Item* previous = nullptr;
+  const auto& shadow_registers = ShadowRegisters();
   auto* kernel = rex::system::kernel_state();
   uint8_t* guest_memory = kernel->memory()->physical_membase();
   for (const Item& item : frame.items) {
@@ -596,25 +706,18 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
       renderer.OcclusionEvent(item.reports, item.report_count, guest_memory);
       continue;
     }
-    // Groups the previous item had the same are already in the file.
-    const uint32_t* shadow = frame.registers.data() + item.registers;
-    const uint32_t* previous_shadow = previous ? frame.registers.data() + previous->registers : nullptr;
-    for (const ShadowGroup& g : kShadowGroups) {
-      if (!previous_shadow ||
-          std::memcmp(shadow, previous_shadow, g.count * sizeof(uint32_t))) {
-        uint32_t* out = &regs->values[g.first_register];
-        for (uint32_t i = 0; i < g.count; ++i) {
-          out[i] = _byteswap_ulong(shadow[i]);
-        }
+    // The registers that changed since the previous item (the first item of
+    // a frame has all of them).
+    const uint32_t* changes = frame.registers.data();
+    for (uint32_t p = item.registers_begin; p < item.registers_end;) {
+      const uint32_t header = changes[p++];
+      const uint16_t* targets = shadow_registers.data() + (header & 0xFFFF);
+      const uint32_t n = header >> 16;
+      for (uint32_t i = 0; i < n; ++i) {
+        regs->values[targets[i]] = _byteswap_ulong(changes[p + i]);
       }
-      shadow += g.count;
-      if (previous_shadow) {
-        previous_shadow += g.count;
-      }
+      p += n;
     }
-    // A UP draw overwrites fetch constant 95 below: copy everything again
-    // after it.
-    previous = item.up ? nullptr : &item;
     regs->values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL] = 0x80000000;
     regs->values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR] = 0x3FFF3FFF;
     if (item.resolve) {
@@ -639,10 +742,13 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     d.vertex_count = item.count;
     d.indexed = item.indexed;
     d.index_address = item.index_address;
+    // A UP draw's data is fetched through constant 95, which it overwrites
+    // here; the shadow's values come back after the draw.
+    uint32_t* up_fetch = &regs->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 0xBE];
+    const uint32_t up_fetch_saved[2] = {up_fetch[0], up_fetch[1]};
     if (item.up) {
-      regs->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 0xBE] = item.up_address | 3;
-      regs->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 0xBF] =
-          0x10000002 | (item.up_dwords << 2);
+      up_fetch[0] = item.up_address | 3;
+      up_fetch[1] = 0x10000002 | (item.up_dwords << 2);
     }
     reg::VGT_DRAW_INITIATOR initiator = {};
     initiator.prim_type = xenos::PrimitiveType(item.primitive_type);
@@ -657,6 +763,8 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     d.pixel_shader_code = frame.code.data() + item.ps_code;
     d.pixel_shader_dwords = item.ps_dwords;
     renderer.Draw(d);
+    up_fetch[0] = up_fetch_saved[0];
+    up_fetch[1] = up_fetch_saved[1];
   }
   // NATIVE_SAVE_FRONT=<png path>: the front buffer every 300 frames (diagnostics).
   if (const char* save_path = std::getenv("NATIVE_SAVE_FRONT")) {
@@ -683,6 +791,10 @@ void NativeRendererRecord(int entry, const uint32_t* args, uint32_t result, uint
 }
 
 void NativeRendererSwapDone() { Parallel::Get().SwapDone(); }
+
+void NativeRendererBefore(int entry, const uint32_t* args, uint8_t* base) {
+  Parallel::Get().Before(entry, args, base);
+}
 
 // The function of the D3D library that writes the shader loads (IM_LOAD) of a
 // draw (device +0 is the command buffer write pointer, at the last dword

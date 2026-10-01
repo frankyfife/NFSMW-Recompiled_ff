@@ -88,7 +88,10 @@ bool RenderCaptureActive();
 void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint32_t result,
                        uint8_t* base);
 void RenderCaptureSwapDone();
+// Before the call: the D3D flush clears the dirty masks it writes out.
+void RenderCaptureBefore(int entry, const uint32_t* args, uint8_t* base);
 """)
+before = {"sub_825A40C0"}
 for i, f in enumerate(entries):
     out.append(f'extern "C" REX_FUNC(__imp__{f});')
     out.append(f'extern "C" REX_FUNC({f}) {{')
@@ -100,6 +103,8 @@ for i, f in enumerate(entries):
     out.append("  if (RenderCaptureActive()) {")
     out.append("    const uint32_t args[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,")
     out.append("                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};")
+    if f in before:
+        out.append(f"    RenderCaptureBefore({i}, args, base);")
     out.append(f"    __imp__{f}(ctx, base);")
     out.append(f'    RenderCaptureCall({i}, "{f}", args, ctx.r3.u32, base);')
     out.append("  } else {")

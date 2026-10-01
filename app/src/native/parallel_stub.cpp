@@ -4,4 +4,5 @@
 
 bool NativeRendererEnabled() { return false; }
 void NativeRendererRecord(int, const uint32_t*, uint32_t, uint8_t*) {}
+void NativeRendererBefore(int, const uint32_t*, uint8_t*) {}
 void NativeRendererSwapDone() {}
