@@ -62,6 +62,9 @@ REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
 REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
                      "With native_renderer: background threads that create pipelines (0 = "
                      "when first needed, the renderer waits)");
+REXCVAR_DEFINE_INT32(native_renderer_msaa, -1, "Debug",
+                     "With native_renderer: samples of the targets the game draws with MSAA "
+                     "(-1 = the game's 4, 0 = off, 1 = 2x, 2 = 4x, 3 = 8x)");
 REXCVAR_DEFINE_INT32(native_renderer_anisotropic, -1, "Debug",
                      "With native_renderer: anisotropic filtering forced on textures with "
                      "linear filtering and mips (0 off, 1-5 = 1x-16x; -1 = the game's)");
@@ -652,6 +655,7 @@ void Parallel::Thread() {
   const uint32_t scale = uint32_t(std::clamp(REXCVAR_GET(native_renderer_scale), 1, 4));
   replay::Renderer renderer(scale);
   renderer.SetAnisotropicOverride(REXCVAR_GET(native_renderer_anisotropic));
+  renderer.SetMsaaOverride(std::clamp(REXCVAR_GET(native_renderer_msaa), -1, 3));
   renderer.SetAsyncPipelineThreads(
       uint32_t(std::clamp(REXCVAR_GET(native_renderer_pipeline_threads), 0, 8)));
   auto* kernel = rex::system::kernel_state();
@@ -724,6 +728,15 @@ void Parallel::Thread() {
       if (const uint64_t misaligned = walks_misaligned_.exchange(0)) {
         REXLOG_WARN("[native renderer] {} shader load scans did not end at the write pointer",
                     misaligned);
+      }
+      {
+        static uint32_t logged_msaa = 0;
+        if (s.msaa_samples && s.msaa_samples != logged_msaa) {
+          logged_msaa = s.msaa_samples;
+          REXLOG_INFO("[native renderer] MSAA setting: the game's MSAA targets drawn with {} "
+                      "samples",
+                      s.msaa_samples);
+        }
       }
       {
         static double logged_translate = 0, logged_pipeline = 0;

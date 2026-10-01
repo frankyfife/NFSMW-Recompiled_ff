@@ -53,6 +53,10 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 
 - **Supersampling:** the launcher's *Render scale* draws the frame at 2×, 3× or 4×
   1280 × 720 (on top of the game's own 4× MSAA): much smoother edges, sharper textures.
+- **MSAA:** the game's multisampled targets with 1, 2, 4 (the game's) or 8 samples.
+- **Post-processing switch:** the game's visual treatment (the green-yellow colour
+  grading, bloom, vignette, motion blur) can be switched off, live; the game then
+  copies the plain picture with its own `screen_passthru` technique.
 - Sun glare, shadows, reflections, the exposure and the HUD come out as on the
   emulation; the picture was compared pixel by pixel against it.
 - New pipelines are compiled in the background, so a shader the driver has never seen
@@ -71,8 +75,19 @@ in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
 | Look | arrow keys | right stick |
 | Up / down | E / Q | right / left trigger |
 | Faster | Space, Backspace (even faster) | A, B |
+| Zoom (field of view) | 1 wider, 3 narrower, K resets | LB, RB, right stick click |
 
 How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
+
+### Field of view, settings menu on the controller
+
+- **Field of view of the driving camera:** 50–160 % of the game's own (78° at rest; it
+  still widens with speed), in the launcher and live in the Esc menu. Menus and
+  cutscenes keep theirs.
+- **Settings menu with the controller:** **Back + Start** opens the in-game settings
+  menu (and closes it). D-pad or left stick move, A selects, LB / RB switch section,
+  B closes. *System → Quit to desktop* ends the game, so it can be quit without a
+  keyboard. The game gets no input while the menu is open.
 
 ### It runs, from a Windows machine, start to finish
 
@@ -153,7 +168,9 @@ the launcher now always starts the native renderer, which has its own answers to
 | Graphics: GPU emulation (Vulkan) | Compiles and loads, renders black on Intel. Untested elsewhere; the fork's occlusion and texture fixes are D3D12 only |
 | Controller (with rumble) and keyboard | Working |
 | Render scale (supersampling) | Working, up to 4× (native renderer) |
-| Free camera, photo mode | Working (F6, F8) |
+| Free camera, photo mode | Working (F6, F8), with zoom |
+| Field of view, MSAA, post-processing switch | Working (launcher and Esc menu) |
+| Settings menu and quitting with the controller | Working (Back + Start) |
 | Save games | Working |
 | Multiplayer | **Not working.** The privilege gate is solved; the network layer underneath is not. See [docs/diario/red-y-privilegios.md](docs/diario/red-y-privilegios.md) |
 

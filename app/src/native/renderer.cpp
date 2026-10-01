@@ -236,7 +236,7 @@ Texture2D<float4> source : register(t0);
 cbuffer Constants : register(b0) {
   int2 source_offset;  // source pixel = dest pixel + source_offset
   uint sample_select;  // xenos::CopySampleSelect
-  uint flags;          // 1 = swap red and blue
+  uint flags;          // 1 = swap red and blue; bits 8-15: the source's samples
 };
 float4 Load(int2 p, int s) {
 #if MSAA
@@ -252,19 +252,26 @@ float4 VSMain(uint id : SV_VertexID) : SV_Position {
 float4 PSMain(float4 position : SV_Position) : SV_Target {
   int2 p = int2(position.xy) + source_offset;
   float4 c;
+#if MSAA
+  // The game's 4 samples, or the sample count chosen instead (MSAA setting):
+  // then a single sample is the nearest one, a pair or all four the average.
+  uint n = max((flags >> 8) & 0xFF, 1u);
   if (sample_select <= 3) {
-    c = Load(p, sample_select);
-  } else if (sample_select == 4) {
+    c = Load(p, min(sample_select, n - 1));
+  } else if (n == 4 && sample_select == 4) {
     c = 0.5 * (Load(p, 0) + Load(p, 1));
-  } else if (sample_select == 5) {
+  } else if (n == 4 && sample_select == 5) {
     c = 0.5 * (Load(p, 2) + Load(p, 3));
   } else {
-#if MSAA
-    c = 0.25 * (Load(p, 0) + Load(p, 1) + Load(p, 2) + Load(p, 3));
-#else
-    c = Load(p, 0);
-#endif
+    c = 0;
+    for (uint i = 0; i < n; ++i) {
+      c += Load(p, i);
+    }
+    c /= n;
   }
+#else
+  c = Load(p, 0);
+#endif
   if (flags & 1) {
     c = c.bgra;
   }
@@ -770,6 +777,42 @@ Renderer::Shader* Renderer::GetShader(const uint8_t* code, uint32_t dwords, uint
   return result;
 }
 
+uint32_t Renderer::HostSamples(uint32_t guest_msaa) {
+  if (!guest_msaa || msaa_override_ < 0) {
+    return 1u << guest_msaa;
+  }
+  const uint32_t wanted = 1u << std::min<int32_t>(msaa_override_, 3);
+  if (!msaa_supported_) {
+    // The highest count up to the wanted one that every format the game
+    // draws to supports (the pipelines need one count for all targets).
+    const DXGI_FORMAT formats[] = {
+        DXGI_FORMAT_R8G8B8A8_UNORM,     DXGI_FORMAT_R10G10B10A2_UNORM,
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT,
+        DXGI_FORMAT_R32_FLOAT,          DXGI_FORMAT_D24_UNORM_S8_UINT,
+        DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
+    msaa_supported_ = 1;
+    for (uint32_t count = 2; count <= 8; count *= 2) {
+      bool all = true;
+      for (DXGI_FORMAT format : formats) {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels = {};
+        levels.Format = format;
+        levels.SampleCount = count;
+        if (FAILED(device_->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &levels,
+                                                sizeof(levels))) ||
+            !levels.NumQualityLevels) {
+          all = false;
+          break;
+        }
+      }
+      if (all) {
+        msaa_supported_ = count;
+      }
+    }
+  }
+  stats_.msaa_samples = std::min(wanted, msaa_supported_);
+  return stats_.msaa_samples;
+}
+
 Renderer::RenderTarget* Renderer::GetRenderTarget(uint32_t edram_base, uint32_t pitch,
                                                   uint32_t msaa, uint32_t format, bool depth) {
   const uint64_t key = (uint64_t(edram_base) << 32) | (uint64_t(pitch) << 8) |
@@ -781,7 +824,7 @@ Renderer::RenderTarget* Renderer::GetRenderTarget(uint32_t edram_base, uint32_t 
   auto rt = std::make_unique<RenderTarget>();
   rt->width = std::max<uint32_t>(pitch, 1) * scale_;
   rt->height = kRenderTargetHeight * scale_;
-  rt->samples = 1u << msaa;
+  rt->samples = HostSamples(msaa);
   rt->depth = depth;
   D3D12_RESOURCE_DESC desc = {};
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -1325,7 +1368,11 @@ void Renderer::Draw(const DrawCall& d) {
   key.pixel_translation = pixel_translation;
   key.root_signature = root;
   key.topology_type = prim == xenos::PrimitiveType::kTriangleStrip ? 1 : 0;
-  key.samples = 1u << msaa;
+  key.samples = HostSamples(msaa);
+  // Occlusion queries count host samples: back to the guest's for this draw.
+  if (occlusion_open_) {
+    occlusion_ratio_[occlusion_slot_] = float(1u << msaa) / float(key.samples);
+  }
   for (uint32_t i = 0; i < color_count; ++i) {
     if (!colors[i]) {
       continue;
@@ -1514,8 +1561,9 @@ void Renderer::Draw(const DrawCall& d) {
     system.ndc_scale[i] = viewport.ndc_scale[i];
     system.ndc_offset[i] = viewport.ndc_offset[i];
   }
-  system.sample_count_log2[0] = surface_info.msaa_samples >= xenos::MsaaSamples::k4X ? 1 : 0;
-  system.sample_count_log2[1] = surface_info.msaa_samples >= xenos::MsaaSamples::k2X ? 1 : 0;
+  // The host's sample count (8 samples have no Xenos pattern: as 4).
+  system.sample_count_log2[0] = key.samples >= 4 ? 1 : 0;
+  system.sample_count_log2[1] = key.samples >= 2 ? 1 : 0;
   system.alpha_test_reference = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
   system.alpha_to_mask =
       color_control.alpha_to_mask_enable ? (color_control.value >> 24) | (1 << 8) : 0;
@@ -2044,7 +2092,8 @@ void Renderer::Resolve(const ResolveCall& r) {
   const uint32_t dest_info = regs[XE_GPU_REG_RB_COPY_DEST_INFO];
   const uint32_t constants[4] = {uint32_t(left - dest_x), uint32_t(top - dest_y),
                                  source->depth ? 0u : sample_select,
-                                 source->depth ? 0u : ((dest_info >> 24) & 1)};
+                                 (source->depth ? 0u : ((dest_info >> 24) & 1)) |
+                                     (source->samples << 8)};
   list_->SetPipelineState(resolve_color_[source->samples > 1][source->depth ? 1 : 0].Get());
   list_->SetGraphicsRootSignature(resolve_root_signature_.Get());
   list_->SetGraphicsRoot32BitConstants(0, 4, constants, 0);
@@ -2765,6 +2814,7 @@ void Renderer::OcclusionBegin() {
     return;
   }
   occlusion_slot_ = uint32_t(occlusion_next_slot_++ % kOcclusionSlots);
+  occlusion_ratio_[occlusion_slot_] = 1.0f;
   list_->BeginQuery(occlusion_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, occlusion_slot_);
   occlusion_open_ = true;
 }
@@ -2788,12 +2838,16 @@ void Renderer::OcclusionEvent(const uint32_t* addresses, uint32_t count, uint8_t
   OcclusionReport report;
   report.slots = std::move(occlusion_interval_);
   occlusion_interval_.clear();
+  report.ratios.reserve(report.slots.size());
+  for (uint32_t slot : report.slots) {
+    report.ratios.push_back(occlusion_ratio_[slot]);
+  }
   report.addresses.assign(addresses, addresses + count);
   // Delivered in order once the GPU is done with what was recorded so far.
   AfterCompletion([this, guest_memory, report = std::move(report)]() {
     uint64_t samples = 0;
-    for (uint32_t slot : report.slots) {
-      samples += occlusion_mapping_[slot];
+    for (size_t i = 0; i < report.slots.size(); ++i) {
+      samples += uint64_t(double(occlusion_mapping_[report.slots[i]]) * report.ratios[i] + 0.5);
     }
     // In the guest's samples: at a scale every guest pixel is scale^2 host ones.
     samples /= uint64_t(scale_) * scale_;

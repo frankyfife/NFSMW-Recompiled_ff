@@ -20,13 +20,25 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // ---------------------------------------------------------------------------
 //  Cvar del proyecto: contenido Black Edition.
@@ -194,8 +206,80 @@ void ComboSimple(const char* etiqueta, const std::string& actual, const Opcion* 
 
 }  // namespace
 
+// Controller --------------------------------------------------------------
+// The SDK's ImGui gets no controller input: the menu feeds it itself, from
+// the states the game polls (the game keeps polling while the menu is open;
+// it gets neutral states meanwhile).
+namespace {
+constexpr uint16_t kPadUp = 0x0001, kPadDown = 0x0002, kPadLeft = 0x0004, kPadRight = 0x0008;
+constexpr uint16_t kPadStart = 0x0010, kPadBack = 0x0020, kPadLb = 0x0100, kPadRb = 0x0200;
+constexpr uint16_t kPadA = 0x1000, kPadB = 0x2000, kPadX = 0x4000, kPadY = 0x8000;
+std::atomic<uint32_t> g_pad_buttons{0};
+std::atomic<uint32_t> g_pad_left_stick{0};  // x | y << 16
+std::atomic<bool> g_menu_open{false};
+std::atomic<bool> g_pad_hold{false};  // neutral until every button is released
+std::mutex g_pad_toggle_mutex;
+std::function<void()> g_pad_toggle;
+
+void FeedPad(ImGuiIO& io) {
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+  const uint32_t b = g_pad_buttons.load();
+  const struct {
+    ImGuiKey key;
+    uint16_t mask;
+  } keys[] = {{ImGuiKey_GamepadDpadUp, kPadUp},     {ImGuiKey_GamepadDpadDown, kPadDown},
+              {ImGuiKey_GamepadDpadLeft, kPadLeft}, {ImGuiKey_GamepadDpadRight, kPadRight},
+              {ImGuiKey_GamepadStart, kPadStart},   {ImGuiKey_GamepadBack, kPadBack},
+              {ImGuiKey_GamepadL1, kPadLb},         {ImGuiKey_GamepadR1, kPadRb},
+              {ImGuiKey_GamepadFaceDown, kPadA},    {ImGuiKey_GamepadFaceRight, kPadB},
+              {ImGuiKey_GamepadFaceLeft, kPadX},    {ImGuiKey_GamepadFaceUp, kPadY}};
+  for (const auto& k : keys) {
+    io.AddKeyEvent(k.key, (b & k.mask) != 0);
+  }
+  const uint32_t stick = g_pad_left_stick.load();
+  const auto axis = [](int16_t v) {
+    constexpr float kDeadZone = 7849.0f;
+    const float f = std::fabs(float(v));
+    return f < kDeadZone ? 0.0f : std::min((f - kDeadZone) / (32767.0f - kDeadZone), 1.0f);
+  };
+  const int16_t x = int16_t(stick), y = int16_t(stick >> 16);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, x < 0 && axis(x) > 0, x < 0 ? axis(x) : 0);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, x > 0 && axis(x) > 0, x > 0 ? axis(x) : 0);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, y > 0 && axis(y) > 0, y > 0 ? axis(y) : 0);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, y < 0 && axis(y) > 0, y < 0 ? axis(y) : 0);
+}
+}  // namespace
+
+bool NfsmwMenuPadFilter(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger,
+                        int16_t left_x, int16_t left_y) {
+  g_pad_buttons.store(buttons);
+  g_pad_left_stick.store(uint32_t(uint16_t(left_x)) | (uint32_t(uint16_t(left_y)) << 16));
+  static bool combo_before = false;
+  const bool combo = (buttons & (kPadStart | kPadBack)) == (kPadStart | kPadBack);
+  if (combo && !combo_before) {
+    g_pad_hold.store(true);
+    std::lock_guard<std::mutex> lock(g_pad_toggle_mutex);
+    if (g_pad_toggle) {
+      g_pad_toggle();
+    }
+  }
+  combo_before = combo;
+  if (g_pad_hold.load() && buttons == 0 && left_trigger < 30 && right_trigger < 30) {
+    g_pad_hold.store(false);
+  }
+  return g_menu_open.load() || g_pad_hold.load();
+}
+
+void NfsmwMenuSetPadToggle(std::function<void()> toggle) {
+  std::lock_guard<std::mutex> lock(g_pad_toggle_mutex);
+  g_pad_toggle = std::move(toggle);
+}
+
 NfsmwMenuDialog::NfsmwMenuDialog(rex::ui::ImGuiDrawer* drawer, Callbacks callbacks)
-    : rex::ui::ImGuiDialog(drawer), callbacks_(std::move(callbacks)) {}
+    : rex::ui::ImGuiDialog(drawer), callbacks_(std::move(callbacks)) {
+  g_menu_open.store(true);
+}
 
 NfsmwMenuDialog::~NfsmwMenuDialog() = default;
 
@@ -208,6 +292,12 @@ void NfsmwMenuDialog::Persistir() {
 }
 
 void NfsmwMenuDialog::OnClose() {
+  // The button that closed it does not reach the game.
+  g_pad_hold.store(true);
+  g_menu_open.store(false);
+  ImGuiIO& io = GetIO();
+  io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+  io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
   if (callbacks_.on_closed) {
     callbacks_.on_closed();
   }
@@ -217,11 +307,35 @@ void NfsmwMenuDialog::OnClose() {
 }
 
 void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
-  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+  FeedPad(io);
+  // Shift + arrows are the D-pad of the keyboard controller (MnK): navigation.
+  // (The SDK sets no ImGui modifier, so Shift is asked from Windows.)
+#if defined(_WIN32)
+  const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+#else
+  const bool shift = false;
+#endif
+  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && !shift) {
     selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && !shift) {
     selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+  }
+  // Controller: LB / RB switch section, B (nothing being edited, no list open)
+  // or Start closes; Back + Start is the app's toggle.
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+    selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+    selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+  }
+  if (!first_draw_ && !ImGui::IsAnyItemActive() &&
+      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+      (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+       (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
+        !ImGui::IsKeyDown(ImGuiKey_GamepadBack)))) {
+    Close();
+    return;
   }
 
   const ImVec2 pantalla = io.DisplaySize;
@@ -234,8 +348,12 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   const ImGuiWindowFlags flags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus |
-      ImGuiWindowFlags_NoNav;
+      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus;
+  if (first_draw_) {
+    // Focused, so the controller navigates it right away.
+    ImGui::SetNextWindowFocus();
+    first_draw_ = false;
+  }
   ImGui::SetNextWindowPos(origen);
   ImGui::SetNextWindowSize(ImVec2(ancho, alto));
   if (!ImGui::Begin("##nfsmw_menu", nullptr, flags)) {
@@ -273,7 +391,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   const float y_pie = x1.y - pie;
   dl->AddLine(ImVec2(x0.x + pad, y_pie), ImVec2(x1.x - pad, y_pie), kMarco, borde);
   dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(x0.x + pad, y_pie + 6.0f), kTextoAtenuado,
-              "Up / Down arrows switch section   |   ESC closes");
+              "Up / Down or LB / RB: section   |   ESC, B or Back + Start closes");
 
   // Carril de pestanas a la izquierda.
   const float y_carril = x0.y + cabecera;
@@ -288,17 +406,21 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
                 ImVec2(x0.x + 16.0f, y_i + 8.0f), sel ? kTexto : kTextoAtenuado,
                 kTitulosPestana[i]);
     ImGui::SetCursorScreenPos(ImVec2(x0.x + borde, y_i));
+    // Not for the controller's navigation (LB / RB switch section).
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
     if (ImGui::InvisibleButton(
             (std::string("##pestana") + std::to_string(i)).c_str(),
             ImVec2(carril - borde, 40.0f))) {
       selected_tab_ = i;
     }
+    ImGui::PopItemFlag();
   }
 
   // Contenido, a la derecha del carril.
   ImGui::SetCursorScreenPos(ImVec2(x0.x + carril + pad, y_carril + 8.0f));
   const ImVec2 tam_contenido(ancho - carril - 2.0f * pad, alto - cabecera - pie - 16.0f);
-  ImGui::BeginChild("##nfsmw_contenido", tam_contenido, false, ImGuiWindowFlags_NoBackground);
+  ImGui::BeginChild("##nfsmw_contenido", tam_contenido, ImGuiChildFlags_NavFlattened,
+                    ImGuiWindowFlags_NoBackground);
 
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 6.0f));
@@ -365,6 +487,24 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
                 });
     MarcaReinicio();
 
+    // The native renderer (the launcher's default) has its own scale; the
+    // emulation's options below only apply without it.
+    const bool nativo = ExisteCvar("native_renderer") && CvarB("native_renderer");
+    if (nativo && ExisteCvar("native_renderer_scale")) {
+      static const Opcion kEscala[] = {
+          {"1x - 720p (native)", "1"},
+          {"2x - 1440p (4x the pixels)", "2"},
+          {"3x - 2160p 4K (9x the pixels)", "3"},
+          {"4x - 2880p (16x the pixels)", "4"}};
+      ComboSimple("Render scale (supersampling)", CvarS("native_renderer_scale"), kEscala, 4,
+                  nullptr, [this](const char* v) {
+                    SetCvarS("native_renderer_scale", v);
+                    Persistir();
+                  });
+      MarcaReinicioConAviso(
+          "The native renderer draws every frame at this multiple of 720p and scales it to "
+          "the window: smoother edges, sharper textures.");
+    } else {
     static const Opcion kIRes[] = {
         {"1x - 720p (native)", "1"},
         {"2x - 1440p (4x the pixels)", "2"},
@@ -379,6 +519,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     MarcaReinicioConAviso(
         "Integer scale of the game's render targets: more pixels every frame, not a "
         "stretch. On a modern GPU 2x or 3x cost next to nothing.");
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -387,7 +528,17 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
     ImGui::TextUnformatted("IMAGE QUALITY");
     ImGui::Spacing();
 
-    if (ExisteCvar("anisotropic_override")) {
+    if (nativo && ExisteCvar("native_renderer_anisotropic")) {
+      static const Opcion kAnisoNativo[] = {{"The game's", "-1"}, {"Off (bilinear)", "0"},
+                                            {"2x", "2"},          {"4x", "3"},
+                                            {"8x", "4"},          {"16x", "5"}};
+      ComboSimple("Anisotropic filtering", CvarS("native_renderer_anisotropic"), kAnisoNativo, 6,
+                  nullptr, [this](const char* v) {
+                    SetCvarS("native_renderer_anisotropic", v);
+                    Persistir();
+                  });
+      MarcaReinicio();
+    } else if (ExisteCvar("anisotropic_override")) {
       static const Opcion kAniso[] = {{"Off (bilinear)", "0"}, {"1x", "1"}, {"2x", "2"},
                                       {"4x", "3"}, {"8x", "4"}, {"16x", "5"}};
       ComboSimple("Anisotropic filtering", CvarS("anisotropic_override"), kAniso, 6, nullptr,
@@ -398,7 +549,32 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       MarcaVivo("applies instantly");
     }
 
-    if (ExisteCvar("swap_post_effect")) {
+    if (nativo && ExisteCvar("native_renderer_msaa")) {
+      static const Opcion kMsaa[] = {
+          {"4x (the game's)", "-1"}, {"Off", "0"}, {"2x", "1"}, {"8x", "3"}};
+      ComboSimple("MSAA", CvarS("native_renderer_msaa"), kMsaa, 4, nullptr,
+                  [this](const char* v) {
+                    SetCvarS("native_renderer_msaa", v);
+                    Persistir();
+                  });
+      MarcaReinicioConAviso(
+          "Samples of the targets the game draws with multisampling (its own: 4). On top of "
+          "the render scale.");
+    }
+
+    if (ExisteCvar("post_processing")) {
+      bool post = CvarB("post_processing");
+      if (ImGui::Checkbox("Post-processing (visual treatment)", &post)) {
+        SetCvarB("post_processing", post);
+        Persistir();
+      }
+      MarcaVivo("applies instantly");
+      ImGui::TextColored(ImColor(kTextoAtenuado),
+                         "The game's colour grading (the green-yellow tint), bloom, vignette and "
+                         "motion blur. Off: the plain picture.");
+    }
+
+    if (!nativo && ExisteCvar("swap_post_effect")) {
       static const Opcion kAA[] = {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}};
       ComboSimple("Anti-aliasing", CvarS("swap_post_effect"), kAA, 3, nullptr, [this](const char* v) {
         SetCvarS("swap_post_effect", v);
@@ -407,7 +583,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       MarcaReinicio();
     }
 
-    if (ExisteCvar("gpu_backend")) {
+    if (!nativo && ExisteCvar("gpu_backend")) {
       static const Opcion kApi[] = {{"Direct3D 12", "d3d12"}, {"Vulkan", "vulkan"}};
       ComboSimple("Graphics API", CvarS("gpu_backend"), kApi, 2, nullptr, [this](const char* v) {
         SetCvarS("gpu_backend", v);
@@ -469,8 +645,20 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       ImGui::TextColored(ImColor(kTextoAtenuado),
                          "The game's debug world camera. Move: WASD / left stick. Look: arrow "
                          "keys / right stick. Up and down: E and Q / triggers. Faster: Space or "
-                         "Backspace / A or B. The car gets no input meanwhile.");
+                         "Backspace / A or B. Zoom: 1 and 3 / LB and RB, K / right stick click "
+                         "resets it. The car gets no input meanwhile.");
       ImGui::Spacing();
+      if (ExisteCvar("freecam_fov")) {
+        float fov = CvarF("freecam_fov");
+        if (ImGui::SliderFloat("Free camera field of view", &fov, 10.0f, 150.0f, "%.0f deg")) {
+          SetCvarF("freecam_fov", std::clamp(fov, 10.0f, 150.0f));
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          Persistir();
+        }
+        MarcaVivo("(applies instantly; the game's: 71.5)");
+        ImGui::Spacing();
+      }
       if (ExisteCvar("freecam_photo_mode")) {
         bool foto = CvarB("freecam_photo_mode");
         if (ImGui::Checkbox("Photo mode: world paused (F8)", &foto)) {
@@ -549,6 +737,21 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
         Persistir();
       }
       MarcaVivo("live: also with the menu closed, until changed again or the game is closed");
+    }
+
+    if (ExisteCvar("fov_scale")) {
+      float escala = CvarF("fov_scale") * 100.0f;
+      if (ImGui::SliderFloat("Field of view (driving)", &escala, 50.0f, 160.0f, "%.0f%%")) {
+        SetCvarF("fov_scale", std::clamp(escala, 50.0f, 160.0f) / 100.0f);
+      }
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        Persistir();
+      }
+      MarcaVivo("(applies instantly)");
+      ImGui::TextColored(ImColor(kTextoAtenuado),
+                         "Times the game's own: 100%% is 78 degrees at rest, 130%% about 101. It "
+                         "still widens with speed as before. Menus and cutscenes keep theirs.");
+      ImGui::Spacing();
     }
 
     ImGui::Spacing();

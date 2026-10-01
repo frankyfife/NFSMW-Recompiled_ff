@@ -65,6 +65,8 @@ constexpr Choice kLanguages[] = {
 };
 
 const QList<int> kAnisoValues = {0, 2, 3, 4, 5};  // off, 2x, 4x, 8x, 16x
+// native_renderer_msaa: off, 2x, the game's 4x, 8x.
+const QList<int> kMsaaValues = {0, 1, -1, 3};
 const QStringList kFilterValues = {"bilinear", "cas", "fsr"};
 
 QLabel* note(const QString& text = QString()) {
@@ -391,6 +393,28 @@ QWidget* LauncherWindow::buildContent() {
                           "Unlocking does not touch your save: switch it off and "
                           "your normal progress is back.")),
       gameOpts->grid()->rowCount(), 0, 1, 2);
+  // Field of view of the driving camera, times the game's.
+  auto* fovRow = new QWidget;
+  auto* fr = new QHBoxLayout(fovRow);
+  fr->setContentsMargins(0, 0, 0, 0);
+  fr->setSpacing(10);
+  fov_ = new QSlider(Qt::Horizontal);
+  fov_->setRange(50, 160);
+  fov_->setSingleStep(5);
+  fov_->setPageStep(10);
+  fov_->setCursor(Qt::PointingHandCursor);
+  fovValue_ = new QLabel;
+  fovValue_->setFixedWidth(90);
+  fovValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  fr->addWidget(fov_, 1);
+  fr->addWidget(fovValue_);
+  gameOpts->addRow(QStringLiteral("Field of view"), fovRow);
+  gameOpts->grid()->addWidget(
+      note(QStringLiteral("The driving camera's, times the game's own (78° at rest); it still "
+                          "widens with speed. Live in the ESC menu too, as is the free "
+                          "camera's (F6; zoom with LB / RB).")),
+      gameOpts->grid()->rowCount(), 0, 1, 2);
+  connect(fov_, &QSlider::valueChanged, this, onChange);
   connect(language_, &QComboBox::currentIndexChanged, this, onChange);
   connect(blackEdition_, &ToggleSwitch::toggled, this, onChange);
   connect(unlockAll_, &ToggleSwitch::toggled, this, onChange);
@@ -424,6 +448,20 @@ QWidget* LauncherWindow::buildContent() {
   aniso_ = new Segmented({QStringLiteral("Off"), QStringLiteral("2×"), QStringLiteral("4×"),
                           QStringLiteral("8×"), QStringLiteral("16×")});
   image->addRow(QStringLiteral("Anisotropic"), aniso_);
+  msaa_ = new Segmented({QStringLiteral("Off"), QStringLiteral("2×"), QStringLiteral("4× · Game"),
+                         QStringLiteral("8×")});
+  image->addRow(QStringLiteral("MSAA"), msaa_);
+  postProcessing_ = new ToggleSwitch(
+      QStringLiteral("Post-processing (colour grading, bloom, motion blur)"));
+  image->addWide(postProcessing_);
+  image->grid()->addWidget(
+      note(QStringLiteral("MSAA: the samples of the targets the game draws with multisampling, "
+                          "on top of the render scale. Post-processing off shows the plain "
+                          "picture, without the game's green-yellow tint; also live in the ESC "
+                          "menu.")),
+      image->grid()->rowCount(), 0, 1, 2);
+  connect(msaa_, &Segmented::currentIndexChanged, this, onChange);
+  connect(postProcessing_, &ToggleSwitch::toggled, this, onChange);
   filter_ = new Segmented({QStringLiteral("Bilinear"), QStringLiteral("CAS"), QStringLiteral("FSR")});
   image->addRow(QStringLiteral("Output filter"), filter_);
   auto* sharpRow = new QWidget;
@@ -605,6 +643,7 @@ void LauncherWindow::loadSettings() {
   }
   blackEdition_->setChecked(s.value("game/black_edition", true).toBool());
   unlockAll_->setChecked(s.value("game/unlock_all", false).toBool());
+  fov_->setValue(std::clamp(s.value("game/fov_percent", 100).toInt(), 50, 160));
 
   const QString fps = s.value("frame/mode", "60").toString();
   fps_->setCurrentIndex(fps == "60" ? 1 : fps == "unlimited" ? 2 : fps == "custom" ? 3 : 0);
@@ -617,6 +656,9 @@ void LauncherWindow::loadSettings() {
   filter_->setCurrentIndex(
       std::max<qsizetype>(0, kFilterValues.indexOf(s.value("image/filter", "bilinear").toString())));
   sharpness_->setValue(s.value("image/sharpness", 50).toInt());
+  const qsizetype ms = kMsaaValues.indexOf(s.value("image/msaa", -1).toInt());
+  msaa_->setCurrentIndex(ms >= 0 ? int(ms) : 2);
+  postProcessing_->setChecked(s.value("image/post_processing", true).toBool());
 
 
   pacingAtGuest_->setChecked(s.value("advanced/pacing_at_guest", true).toBool());
@@ -640,6 +682,7 @@ void LauncherWindow::saveSettings() const {
   s.setValue("game/language", QString::fromLatin1(kLanguages[language_->currentIndex()].value));
   s.setValue("game/black_edition", blackEdition_->isChecked());
   s.setValue("game/unlock_all", unlockAll_->isChecked());
+  s.setValue("game/fov_percent", fov_->value());
   static const char* const kFpsModes[] = {"30", "60", "unlimited", "custom"};
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
@@ -647,6 +690,8 @@ void LauncherWindow::saveSettings() const {
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
   s.setValue("image/sharpness", sharpness_->value());
+  s.setValue("image/msaa", kMsaaValues[msaa_->currentIndex()]);
+  s.setValue("image/post_processing", postProcessing_->isChecked());
   s.setValue("advanced/pacing_at_guest", pacingAtGuest_->isChecked());
   s.setValue("advanced/low_latency", lowLatency_->isChecked());
   s.setValue("advanced/adaptive_pacing", adaptivePacing_->isChecked());
@@ -749,6 +794,9 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   a << opt("swap_post_effect", "none");
   a << opt("anisotropic_override", QString::number(kAnisoValues[aniso_->currentIndex()]));
   a << opt("native_renderer_anisotropic", QString::number(kAnisoValues[aniso_->currentIndex()]));
+  a << opt("native_renderer_msaa", QString::number(kMsaaValues[msaa_->currentIndex()]));
+  a << flag("post_processing", postProcessing_->isChecked());
+  a << opt("fov_scale", QString::number(fov_->value() / 100.0, 'f', 2));
   // Advanced tab (see buildAdvanced for what each one does).
   a << flag("frame_pacing_at_guest", pacingAtGuest_->isChecked());
   a << flag("frame_pacing_low_latency", lowLatency_->isChecked());
@@ -825,6 +873,8 @@ void LauncherWindow::refresh() {
   sharpness_->setEnabled(sharpen);
   sharpnessValue_->setEnabled(sharpen);
   sharpnessValue_->setText(QStringLiteral("%1%").arg(sharpness_->value()));
+  fovValue_->setText(QStringLiteral("%1% · %2°").arg(fov_->value()).arg(
+      qRound(78.0 * fov_->value() / 100.0)));
 
   refreshGameStatus();
 

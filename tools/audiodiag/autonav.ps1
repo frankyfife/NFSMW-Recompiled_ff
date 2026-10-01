@@ -2,7 +2,8 @@
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
-# G(as held, count = seconds; V/T/Y/N hold W/arrow up/D/arrow right), F = F6 (free camera), C = F8 (photo mode).
+# I = Back + Start, O / A = D-pad down / up,
+# G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -71,7 +72,7 @@ foreach ($step in $Keys.Split(',')) {
   $k = $m.Groups[1].Value; $n = if ($m.Groups[2].Value) { [int]$m.Groups[2].Value } else { 1 }
   $gap = if ($m.Groups[3].Value) { [int]$m.Groups[3].Value } else { 1800 }
   if ($k -eq 'W') { Start-Sleep -Seconds $n; continue }
-  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27 }
+  $hold = @{ 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27; 'Q' = 0x31; 'Z' = 0x33 }
   if ($hold.ContainsKey($k)) {
     # Held for n seconds: G = gas (right trigger, O key), V = W key (left
     # stick up), T = arrow up.
@@ -85,6 +86,28 @@ foreach ($step in $Keys.Split(',')) {
     [G4]::keybd_event([byte]$hold[$k], $scan, 2 -bor $ext, [UIntPtr]::Zero)
     continue
   }
+  # Chords (pressed together, in order, released in reverse): I = Tab + Return
+  # (Back + Start), O / A = Shift + arrow down / up (D-pad down / up).
+  $chord = @{ 'I' = @(0x09, 0x0D); 'O' = @(0x10, 0x28); 'A' = @(0x10, 0x26) }
+  if ($chord.ContainsKey($k)) {
+    for ($i = 0; $i -lt $n; $i++) {
+      [G4]::SetForegroundWindow($h) | Out-Null
+      Start-Sleep -Milliseconds 100
+      foreach ($c in $chord[$k]) {
+        $ext = if ($c -ge 0x21 -and $c -le 0x28) { 1 } else { 0 }
+        [G4]::keybd_event([byte]$c, [byte][G4]::MapVirtualKey([uint32]$c, 0), $ext, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 60
+      }
+      Start-Sleep -Milliseconds 150
+      foreach ($c in $chord[$k][($chord[$k].Count - 1)..0]) {
+        $ext = if ($c -ge 0x21 -and $c -le 0x28) { 1 } else { 0 }
+        [G4]::keybd_event([byte]$c, [byte][G4]::MapVirtualKey([uint32]$c, 0), 2 -bor $ext, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 30
+      }
+      Start-Sleep -Milliseconds $gap
+    }
+    continue
+  }
   if ($k -eq 'P') { Shot; continue }
   for ($i = 0; $i -lt $n; $i++) {
     [G4]::SetForegroundWindow($h) | Out-Null
@@ -95,6 +118,8 @@ foreach ($step in $Keys.Split(',')) {
     Start-Sleep -Milliseconds $gap
   }
 }
+$p.Refresh()
+if ($p.HasExited) { "game exited (code $($p.ExitCode))"; return }
 Shot
 if (-not $Keep) { Stop-Process -Id $p.Id -Force; Start-Sleep -Seconds 2 }
 

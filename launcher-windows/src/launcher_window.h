@@ -88,6 +88,10 @@ class LauncherWindow final : public QMainWindow {
   Segmented* filter_ = nullptr;
   QSlider* sharpness_ = nullptr;
   QLabel* sharpnessValue_ = nullptr;
+  Segmented* msaa_ = nullptr;
+  ToggleSwitch* postProcessing_ = nullptr;
+  QSlider* fov_ = nullptr;
+  QLabel* fovValue_ = nullptr;
 
 
   // Advanced tab.

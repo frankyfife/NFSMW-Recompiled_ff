@@ -266,6 +266,8 @@ class NfsmwApp : public rex::ReXApp {
     rex::ui::RegisterBind("bind_nfsmw_menu", "Escape",
                           "Open/close the game settings menu",
                           [this] { AlternarMenu(); });
+    // Controller: Back + Start opens/closes the same menu (nfsmw_menu.cpp).
+    NfsmwMenuSetPadToggle([this] { app_context().CallInUIThread([this] { AlternarMenu(); }); });
     // Free camera (src/freecam.cpp): the game's debug world camera.
     rex::ui::RegisterBind("bind_freecam", "F6", "Free camera on/off", [] {
       if (rex::cvar::GetFlagInfo("freecam") == nullptr) {
@@ -303,6 +305,7 @@ class NfsmwApp : public rex::ReXApp {
   void OnShutdown() override {
     PararVigilante();
     rex::ui::UnregisterBind("bind_nfsmw_menu");
+    NfsmwMenuSetPadToggle(nullptr);
     rex::ui::UnregisterBind("bind_record_frametimes");
     rex::ui::UnregisterBind("bind_freecam");
     rex::ui::UnregisterBind("bind_photo_mode");

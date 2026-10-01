@@ -79,6 +79,7 @@ struct RendererStats {
   double translate_ms = 0, pipeline_ms = 0;  // shader translation, pipeline creation
   uint32_t translations = 0;
   uint32_t draws_waiting_for_pipelines = 0;
+  uint32_t msaa_samples = 0;  // the MSAA setting's samples (0: the game's)
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
   uint32_t texture_tables_reused = 0;
   uint32_t index_ranges_reused = 0;
@@ -101,6 +102,10 @@ class Renderer {
   // Anisotropic filtering forced on textures with linear filtering and mips,
   // as xenos::AnisoFilter (0 off, 1-5 = 1x-16x); -1 leaves the game's.
   void SetAnisotropicOverride(int32_t value) { anisotropic_override_ = value; }
+  // Samples of the targets the game draws with MSAA (its own: 4): -1 the
+  // game's, 0 none, 1 two, 2 four, 3 eight (fewer if the GPU cannot).
+  // Before the first frame.
+  void SetMsaaOverride(int32_t value) { msaa_override_ = value; }
   // Pipelines created by this many background threads (0: when first needed,
   // on the calling thread); draws are skipped until theirs is ready.
   void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
@@ -268,6 +273,9 @@ class Renderer {
   std::vector<std::thread> pipeline_workers_;
   bool pipeline_workers_stop_ = false;
   int32_t anisotropic_override_ = -1;
+  int32_t msaa_override_ = -1;
+  uint32_t msaa_supported_ = 0;  // highest count all formats support, 0: not asked yet
+  uint32_t HostSamples(uint32_t guest_msaa);
   rex::graphics::DxbcShaderTranslator translator_;
   rex::string::StringBuffer disasm_;
   std::unordered_map<uint64_t, std::unique_ptr<Shader>> shaders_;
@@ -333,8 +341,10 @@ class Renderer {
   static constexpr uint32_t kOcclusionSlots = 16384;
   struct OcclusionReport {
     std::vector<uint32_t> slots;
+    std::vector<float> ratios;  // guest samples per host sample, per slot
     std::vector<uint32_t> addresses;
   };
+  float occlusion_ratio_[kOcclusionSlots] = {};
   ComPtr<ID3D12QueryHeap> occlusion_heap_;
   ComPtr<ID3D12Resource> occlusion_readback_;
   const uint64_t* occlusion_mapping_ = nullptr;

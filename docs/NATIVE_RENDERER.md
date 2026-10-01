@@ -535,6 +535,19 @@ same aspect ratio (here 3281x1846). `autonav.ps1` now runs fullscreen
 (`-Windowed` for the old behaviour) and takes its screenshots per-monitor
 DPI aware.
 
+**MSAA setting (`native_renderer_msaa`):** the game draws its main targets
+with 4 samples (measured in free roam: 1599 of 2593 draws, the others to
+1-sample targets). The setting gives the targets the game draws with MSAA 1,
+2, 4 or 8 samples instead (fewer if a format the game draws to cannot have
+them: checked once with `D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS`, the
+pipelines need one count for all targets). The resolve shader takes the
+source's sample count (a single sample: the nearest; a pair or all four with
+other counts: the average of all), the shaders' `sample_count_log2` follows
+the host count (8 as 4), and the occlusion queries, which count host
+samples, are converted back per query slot (guest samples / host samples of
+the draws in it). Compared at render scale 1: off shows stair steps on the
+car's roof, 8x is smoother than the game's 4x.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,

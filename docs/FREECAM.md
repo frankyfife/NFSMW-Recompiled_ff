@@ -10,6 +10,7 @@ own debug world camera (`DebugWorldCameraMover`, camera action
 | Look | arrow keys | right stick |
 | Up / down | E (or O) / Q (or I) | right / left trigger |
 | Faster | Space, Backspace (even faster) | A, B |
+| Zoom | 1 wider, 3 narrower, K back to 71.5° | LB, RB, right stick click |
 
 The car gets no input while the free camera is on. F6 again gives the
 driving camera back. There is no collision: the camera flies through
@@ -58,8 +59,42 @@ native renderer on: 13 MB from 0x82000000):
   game image every 2 s (`NFSMW_DUMP_IMAGE_EVERY`) while driving and in the
   pause menu: the world timer at 0x82A3967C (4000 ticks per second) stands
   still in the pause menu.
+- **Field of view**: the camera keeps it at +196 (uint16, 65536 = a full
+  turn). Found by logging every camera handed a new frame
+  (`sub_82161000(camera, matrix, f1)`): the player's camera (0x82C42230)
+  has 14196 (78°) driving at rest, the debug camera writes 13020 (71.5°)
+  every frame; the cube-map cameras have 90°. The movers write it before
+  `sub_82161000`, which keeps the previous frame's at +420 for the
+  difference; the projection is built from it when the view is drawn
+  (`sub_8211D510`: half the angle, sin/cos). So the free camera's angle
+  (`freecam_fov`, LB/RB at 30° per second) or the driving camera's scaled one
+  (`fov_scale`, only while the wanted action is `CDActionDrive`) is written
+  right after `sub_82161000`, and the game's own is put back before the next
+  world update (and before the next `sub_82161000`), so nothing reads the
+  scaled value back and it never compounds (measured: the game's stays
+  14196 while 18454 is drawn at 130 %). The player's camera is found through
+  the director: running action +40 is the mover, mover +28 its camera; it is
+  only taken when it is one of the cameras `sub_82161000` has seen (while the
+  director switches, the old action's +40 is no pointer; following it
+  crashed).
 - **Input**: the SDK's `XamInputGetState` passes every controller state
   (keyboard through the MnK bindings) through `NfsmwInputFilter`, exported
   by the game's executable (patch in tools/parche_ff.py); it keeps the
   latest state for the camera and gives the game a neutral one while the
-  free camera is on.
+  free camera is on. The settings menu reads the controller there too
+  (`NfsmwMenuPadFilter`, nfsmw_menu.cpp): Back + Start opens it, and while it
+  is open (or the buttons that opened or closed it are still held) the game
+  and the free camera get a neutral state. The SDK's ImGui has no
+  controller input, so the menu feeds it the same state (gamepad
+  navigation).
+
+## Post-processing switch (app/src/post_processing.cpp)
+
+The frame's last passes, `sub_82442478(flags)`: with the byte at +9 the
+picture goes through `visualtreatment.fx` (`sub_822246F0`, technique
+`visualtreatment` or `visualtreatment_branching`: colour curves, tint, bloom
+prepared by `sub_82224C00`, vignette, motion blur), with +8 a second pass of
+it; without them it is copied with the technique `screen_passthru`.
+`post_processing=false` clears both bytes for the call and puts them back
+afterwards. Measured in free roam: +9 = 1, +8 = 0; off, the green-yellow
+grading and the bloom are gone and the HUD is unchanged.

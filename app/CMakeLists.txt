@@ -18,6 +18,7 @@ set(NFSMW_SOURCES
     src/render_capture.cpp
     src/crash_log.cpp
     src/freecam.cpp
+    src/post_processing.cpp
 )
 
 if(WIN32)

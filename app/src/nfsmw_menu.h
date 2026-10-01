@@ -10,6 +10,7 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/overlay/debug_overlay.h>
 
+#include <cstdint>
 #include <functional>
 
 // Escribe la bandera Black Edition (byte 0x82A2CE06) en la memoria del guest.
@@ -17,6 +18,15 @@
 bool AplicarBlackEdition(bool activo);
 // Igual con UnlockAllThings (byte 0x82A2CE00), ver nfsmw_menu.cpp.
 bool AplicarUnlockAll(bool activo);
+
+// Controller: every state of user 0 passes through here (from
+// NfsmwInputFilter, src/freecam.cpp, on the thread that polls the input).
+// Back + Start opens and closes the menu (through the toggle the app sets);
+// returns true while the game must get a neutral state (menu open, or the
+// buttons that opened or closed it still held).
+bool NfsmwMenuPadFilter(uint16_t buttons, uint8_t left_trigger, uint8_t right_trigger,
+                        int16_t left_x, int16_t left_y);
+void NfsmwMenuSetPadToggle(std::function<void()> toggle);
 
 class NfsmwMenuDialog : public rex::ui::ImGuiDialog {
  public:
@@ -47,6 +57,7 @@ class NfsmwMenuDialog : public rex::ui::ImGuiDialog {
   Callbacks callbacks_;
   int selected_tab_ = 0;
   bool quit_requested_ = false;
+  bool first_draw_ = true;
 
   char gamertag_[16];  // 15 caracteres + nulo, como un gamertag de Xbox Live
   bool gamertag_sync_ = false;
