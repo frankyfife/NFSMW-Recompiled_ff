@@ -24,6 +24,53 @@ else()
     add_executable(nfsmw ${NFSMW_SOURCES})
 endif()
 
+# Native renderer running next to the emulation (--native_renderer, see
+# docs/NATIVE_RENDERER.md): Direct3D 12, with the SDK's Xenos shader
+# translator compiled in from the rexglue-sdk source tree (the GPU plugin does
+# not export it). Its cvars stay local (src/native/sdk_cvars_local.h) so the
+# plugin's own settings keep working.
+set(REXSDK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../rexglue-sdk" CACHE PATH
+    "rexglue-sdk source tree, for the native renderer")
+option(NFSMW_NATIVE_RENDERER "Build the native renderer (Windows)" ON)
+if(WIN32 AND NFSMW_NATIVE_RENDERER AND
+   EXISTS "${REXSDK_SOURCE_DIR}/src/graphics/pipeline/shader/dxbc_translator.cpp")
+    set(SDK_GPU "${REXSDK_SOURCE_DIR}/src/graphics")
+    set(NATIVE_SDK_SOURCES
+        ${SDK_GPU}/flags.cpp
+        ${SDK_GPU}/registers.cpp
+        ${SDK_GPU}/register_file.cpp
+        ${SDK_GPU}/format/ucode.cpp
+        ${SDK_GPU}/util/draw.cpp
+        ${SDK_GPU}/pipeline/shader/shader.cpp
+        ${SDK_GPU}/pipeline/shader/translator.cpp
+        ${SDK_GPU}/pipeline/shader/translator_disasm.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc_translator.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc_translator_alu.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc_translator_fetch.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc_translator_memexport.cpp
+        ${SDK_GPU}/pipeline/shader/dxbc_translator_om.cpp
+    )
+    target_sources(nfsmw PRIVATE
+        src/native/parallel.cpp
+        src/native/renderer.cpp
+        ${NATIVE_SDK_SOURCES}
+        ${REXSDK_SOURCE_DIR}/thirdparty/dxbc/DXBCChecksum.cpp
+    )
+    set_source_files_properties(${NATIVE_SDK_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/native/sdk_cvars_local.h;-Wno-unused-variable"
+        SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(${REXSDK_SOURCE_DIR}/thirdparty/dxbc/DXBCChecksum.cpp PROPERTIES
+        COMPILE_OPTIONS "-w" SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(nfsmw PRIVATE
+        src/native ${REXSDK_SOURCE_DIR} ${REXSDK_SOURCE_DIR}/thirdparty/renderdoc)
+    target_link_libraries(nfsmw PRIVATE d3d12 dxgi dxguid d3dcompiler windowscodecs ole32)
+    message(STATUS "Native renderer: on (SDK source ${REXSDK_SOURCE_DIR})")
+else()
+    target_sources(nfsmw PRIVATE src/native/parallel_stub.cpp)
+    message(STATUS "Native renderer: off")
+endif()
+
 # Public symbols (sub_XXXXXXXX) in a PDB for the sampling profiler, link only.
 if(WIN32)
     target_link_options(nfsmw PRIVATE "LINKER:/DEBUG" "LINKER:/OPT:REF" "LINKER:/OPT:ICF")

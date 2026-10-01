@@ -1,4 +1,4 @@
-﻿# nfsmw_replay: draws a captured frame (render_capture_frame) natively with
+# nfsmw_replay: draws a captured frame (render_capture_frame) natively with
 # Direct3D 12, without the game and without EDRAM emulation. Stage 3 of the
 # native renderer, see docs/NATIVE_RENDERER.md.
 #
@@ -16,10 +16,11 @@ set(REXSDK_SOURCE_DIR "D:/NFSMW/rexglue-sdk" CACHE PATH "rexglue-sdk source tree
 find_package(rexglue 0.10.0 REQUIRED CONFIG)
 
 set(SDK_GPU "${REXSDK_SOURCE_DIR}/src/graphics")
+set(NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/native")
 add_executable(nfsmw_replay
     replay.cpp
     capture.cpp
-    renderer.cpp
+    ${NATIVE_DIR}/renderer.cpp
     # Xenos shader translation from the SDK.
     ${SDK_GPU}/flags.cpp
     ${SDK_GPU}/registers.cpp
@@ -37,7 +38,7 @@ add_executable(nfsmw_replay
     ${SDK_GPU}/pipeline/shader/dxbc_translator_om.cpp
     ${REXSDK_SOURCE_DIR}/thirdparty/dxbc/DXBCChecksum.cpp
 )
-target_include_directories(nfsmw_replay PRIVATE ${REXSDK_SOURCE_DIR} ${REXSDK_SOURCE_DIR}/thirdparty/renderdoc)
+target_include_directories(nfsmw_replay PRIVATE ${NATIVE_DIR} ${REXSDK_SOURCE_DIR} ${REXSDK_SOURCE_DIR}/thirdparty/renderdoc)
 set_source_files_properties(${REXSDK_SOURCE_DIR}/thirdparty/dxbc/DXBCChecksum.cpp
     PROPERTIES COMPILE_OPTIONS "-w")
 target_compile_options(nfsmw_replay PRIVATE -march=x86-64-v2 -Wno-unused-variable)

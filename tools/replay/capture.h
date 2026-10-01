@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "guest.h"
+
 namespace replay {
 
 // Entry points of the game's D3D library (index in the capture = position in
@@ -74,14 +76,5 @@ class Capture {
   std::map<uint32_t, std::vector<uint8_t>> objects_;
   std::unique_ptr<uint8_t[]> memory_;
 };
-
-// Guest virtual address -> physical (0xE0000000 views are offset by 4 KB).
-inline uint32_t GuestToPhysical(uint32_t address) {
-  return (address & 0x1FFFFFFF) + (address >= 0xE0000000u ? 0x1000u : 0u);
-}
-
-inline uint32_t LoadBE32(const uint8_t* p) {
-  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
-}
 
 }  // namespace replay

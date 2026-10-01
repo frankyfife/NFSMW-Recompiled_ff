@@ -58,8 +58,10 @@ struct ResolveCall {
 };
 
 struct RendererStats {
+  double sync_ms = 0, texture_ms = 0, flush_ms = 0;
   uint32_t draws = 0, draws_skipped = 0, resolves = 0, textures_loaded = 0,
-           textures_from_resolves = 0, textures_unsupported = 0, pipelines = 0,
+           textures_from_resolves = 0, textures_unsupported = 0, textures_reloaded = 0,
+           pipelines = 0, bytes_uploaded = 0,
            pipeline_failures = 0;
 };
 
@@ -71,6 +73,19 @@ class Renderer {
   bool Initialize();
   // Uploads the whole guest physical memory (512 MB).
   bool UploadMemory(const uint8_t* memory);
+  // In the running game: guest memory is read live. Each draw uploads the
+  // pages it reads (indices, the vertices they cover) that changed since the
+  // last upload, compared once per frame against a copy. Only committed pages
+  // are read (the SDK reserves guest memory and commits it as the game
+  // allocates).
+  bool UseLiveGuestMemory(const uint8_t* physical_memory);
+  // Start of a frame of the running game: guest textures are checked against
+  // their memory again (the game streams textures into the same memory).
+  void BeginFrame();
+
+  // Output to a window: the front buffer (a resolve destination) scaled to it.
+  bool CreateWindowOutput(HWND window);
+  bool Present(uint32_t front_buffer_base);
   // Copies changed guest memory into the GPU copy before the next draw.
   void UpdateMemory(uint32_t address, const uint8_t* data, uint32_t size);
 
@@ -87,6 +102,13 @@ class Renderer {
 
   const RendererStats& stats() const { return stats_; }
   void ResetStats() { stats_ = {}; }
+  // Everything but the pipeline counts (which only grow).
+  void ResetFrameStats() {
+    const RendererStats kept = stats_;
+    stats_ = {};
+    stats_.pipelines = kept.pipelines;
+    stats_.pipeline_failures = kept.pipeline_failures;
+  }
   // Guest memory as the renderer sees it (for texture loading on the CPU).
   void SetGuestMemory(const uint8_t* memory) { guest_memory_ = memory; }
 
@@ -110,6 +132,7 @@ class Renderer {
                           ID3D12Resource** buffer = nullptr, uint64_t* offset = nullptr);
   D3D12_GPU_DESCRIPTOR_HANDLE AllocateViews(uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu);
   bool CreateResolvePipelines();
+  bool CreatePresentPipeline();
   bool BeginList();
 
   ComPtr<IDXGIFactory4> factory_;
@@ -157,6 +180,25 @@ class Renderer {
   ComPtr<ID3D12RootSignature> resolve_root_signature_;
   ComPtr<ID3D12PipelineState> resolve_color_[2][2];  // [msaa][format r8g8b8a8 / r32f]
   ComPtr<ID3D12PipelineState> resolve_depth_[2];      // [msaa] -> r32f
+
+  bool Readable(uint32_t address, uint32_t size) const;
+  void SyncGuestRange(uint32_t address, uint32_t size);
+  void SyncDrawData(const DrawCall& d, const rex::graphics::DxbcShader& vertex_shader);
+  static constexpr uint32_t kLivePage = 4096;
+  bool live_ = false;
+  std::unique_ptr<uint8_t[]> live_copy_;
+  std::vector<uint64_t> page_synced_frame_;
+  uint64_t frame_ = 0;
+  // Resources replaced while the GPU may still use them; freed at Flush.
+  std::vector<ComPtr<ID3D12Resource>> release_after_flush_;
+
+  ComPtr<IDXGISwapChain3> swap_chain_;
+  ComPtr<ID3D12Resource> back_buffers_[2];
+  D3D12_CPU_DESCRIPTOR_HANDLE back_buffer_rtvs_[2] = {};
+  ComPtr<ID3D12RootSignature> present_root_signature_;
+  ComPtr<ID3D12PipelineState> present_pipeline_;
+  HWND window_ = nullptr;
+  uint32_t window_width_ = 0, window_height_ = 0;
 
   RendererStats stats_;
 };

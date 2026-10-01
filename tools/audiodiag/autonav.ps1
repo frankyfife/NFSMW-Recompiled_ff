@@ -11,6 +11,23 @@ public static class G4 {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  delegate bool EnumProc(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr p);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+  // The game's window, not the native renderer's second window.
+  public static IntPtr GameWindow(int pid) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, p) => {
+      uint owner; GetWindowThreadProcessId(h, out owner);
+      if (owner != pid || !IsWindowVisible(h)) return true;
+      var c = new System.Text.StringBuilder(256); GetClassName(h, c, 256);
+      if (c.ToString() == "NfsmwNativeRenderer") return true;
+      found = h; return false;
+    }, IntPtr.Zero);
+    return found;
+  }
   public struct RECT { public int L, T, R, B; }
 }
 "@
@@ -29,7 +46,7 @@ $a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', '--fullscree
 $p = Start-Process "$b\nfsmw.exe" -ArgumentList $a -WorkingDirectory $b -PassThru
 Start-Sleep -Seconds 8
 $p.Refresh()
-$h = $p.MainWindowHandle
+$h = [G4]::GameWindow($p.Id)
 $shot = 0
 function Shot {
   $r = New-Object G4+RECT

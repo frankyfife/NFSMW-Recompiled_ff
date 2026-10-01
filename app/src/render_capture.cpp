@@ -234,15 +234,29 @@ void AddDrawData(uint32_t sequence, const char* name, const uint32_t* args, cons
   }
 }
 
-}  // namespace
-
-bool RenderCaptureActive() {
+bool CaptureFrameActive() {
   const int32_t target = REXCVAR_GET(render_capture_frame);
   return target > 0 && g_swaps.load(std::memory_order_relaxed) == uint64_t(target);
 }
 
+}  // namespace
+
+// native/parallel.cpp: the native renderer running next to the emulation.
+bool NativeRendererEnabled();
+void NativeRendererRecord(int entry, const uint32_t* args, uint32_t result, uint8_t* base);
+void NativeRendererSwapDone();
+
+// Whether the D3D hooks hand their calls to RenderCaptureCall.
+bool RenderCaptureActive() { return CaptureFrameActive() || NativeRendererEnabled(); }
+
 void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint32_t result,
                        uint8_t* base) {
+  if (NativeRendererEnabled()) {
+    NativeRendererRecord(entry, args, result, base);
+  }
+  if (!CaptureFrameActive()) {
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_mutex);
   const uint64_t frame = g_swaps.load(std::memory_order_relaxed);
   if (!g_file) {
@@ -330,6 +344,9 @@ void RenderCaptureCall(int entry, const char* name, const uint32_t* args, uint32
 }
 
 void RenderCaptureSwapDone() {
+  if (NativeRendererEnabled()) {
+    NativeRendererSwapDone();
+  }
   const uint64_t frame = g_swaps.fetch_add(1, std::memory_order_relaxed) + 1;
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_file && frame > g_file_frame) {

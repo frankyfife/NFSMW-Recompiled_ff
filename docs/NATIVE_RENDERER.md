@@ -322,6 +322,46 @@ at start in the audio thread. The SDK now falls back to a silent output
    running game instead of from a file (first in parallel, showing its image
    in a second window), see "Switch over" below.
 
+## Stage 4: the native renderer running in the game (2026-10-01)
+
+`--native_renderer=true` (development mode) draws every frame a second time
+with the native renderer and shows it in its own window,
+"NFSMW - native renderer (parallel)", next to the emulated game.
+
+- **Code:** the renderer moved to `app/src/native/renderer.*` (shared with
+  `tools/replay`); `app/src/native/parallel.cpp` records the frame and runs
+  the renderer thread. The SDK's shader translator is compiled into the game
+  from the rexglue-sdk source tree; its cvars stay local
+  (`app/src/native/sdk_cvars_local.h`), so the GPU plugin's settings are
+  untouched. Without the SDK source (or not on Windows) a stub is built.
+- **Recording (game thread):** the D3D hooks copy at every draw and resolve
+  the device's register shadow, the microcode that runs (vertex shader: the
+  address of the library's IM_LOAD, read back after `sub_825A3AF0`, while
+  the same shader object is bound; else the object's) and the resolve
+  arguments. At the Swap the frame goes to the renderer thread; if it is
+  still busy, the frame is dropped.
+- **Guest memory:** the SDK only reserves guest memory and commits pages as
+  the game allocates them, so the renderer cannot take it as a whole (the
+  D3D12 heap-from-address path refused it, and copying 512 MB faulted). Each
+  draw uploads the pages it reads (its indices and the vertices they cover,
+  per vertex fetch of the shader), compared once per frame against a copy;
+  reads go through structured exception handling. Guest textures are hashed
+  (sampled) once per frame and reloaded when the game streamed another
+  texture into their memory.
+- **Measured (free roam, RTX 5090):** 600 of 600 frames drawn in 10 s,
+  16 ms each, about 1 MB uploaded per frame, 2630 draws and 25 resolves per
+  frame; the game itself stays at 57-60 fps. The picture matches the
+  emulation (sky, colors, shadows, HUD) and shows the whole front buffer.
+  Main menu and title screen also render.
+
+**Open:**
+- The car's shadow on the ground looks weaker than in the emulation.
+- The renderer reads memory later than the draw happened: dynamic data the
+  game rewrites in between can glitch.
+- Second graphics card: the renderer could run on the other adapter.
+- Next big step: replace the emulation's output by this one (show the
+  native image in the game's window), then drop the PM4 path for the frame.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,
