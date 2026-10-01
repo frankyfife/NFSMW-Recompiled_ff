@@ -104,6 +104,26 @@ semantics** too, it just skips the command stream.
 | `sub_825932D8` | DrawVerticesUP: user vertices copied into the command buffer, through a fetch constant |
 | `sub_8258F810` / `sub_8258F998` | Query Issue / GetData (occlusion, EVENT_WRITE) |
 | `sub_825A25A0` | cache flush of an address range (dcbf), 102 per frame. This tells which memory the CPU has just written. |
+| `sub_82595370` / `sub_825953D8` | resource AddRef / Release (reference count in the low byte of the header, `sub_82594C70` destroys) |
+| `sub_82594F38` / `sub_82595170` | resource Lock / **Unlock**: Unlock flushes exactly the dirty range (header +8/+12) through `sub_825A25A0` |
+
+**Resource model:**
+- CPU writes into buffers come with their range through Lock/Unlock, about
+  7000 calls per session. This could replace the write watch in an own
+  renderer.
+- Textures and static geometry come from the BUN files; the game sets up
+  resource headers in memory instead of calling CreateTexture. The rarely
+  called entry points `sub_825953D8`/`sub_82594C70` appear at load time.
+- Still open: which function sets the headers up, and whether the data can
+  change afterwards without Lock. That would matter for streaming.
+
+**Shaders for B:**
+- Translating them on our own is not required. The existing translator in
+  the SDK produces DXBC per shader.
+- Its vertex shaders however fetch from the shared-memory buffer (guest
+  address = buffer offset). The realistic route is therefore a hybrid: keep
+  shader translation and binding layout, and replace the memory, texture and
+  render-target management (the expensive 20 % + 8 % + 8 %).
 
 **What the GPU thread costs, by category** (profile while driving at 120 fps,
 inclusive):
