@@ -2,7 +2,7 @@
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
-# G(as held, count = seconds; V/T/Y/N hold W/arrow up/D/arrow right), F = F6 (free camera).
+# G(as held, count = seconds; V/T/Y/N hold W/arrow up/D/arrow right), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -39,7 +39,7 @@ public static class G4 {
 if (-not [G4]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [G4]::SetProcessDPIAware() | Out-Null }
 # S = Space (A button), B = Backspace (B button), H/J/K/M = stick left/right/up/down (A/D/W/S keys)
 $vk = @{ 'E' = 0x0D; 'L' = 0x25; 'R' = 0x27; 'U' = 0x26; 'D' = 0x28; 'S' = 0x20; 'X' = 0x1B;
-         'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53; 'F' = 0x75 }
+         'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53; 'F' = 0x75; 'C' = 0x77 }
 $b = "D:\NFSMW\NFSMW-Recompiled_ff\build"
 $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }

@@ -274,6 +274,18 @@ class NfsmwApp : public rex::ReXApp {
       const bool on = rex::cvar::GetFlagByName("freecam") == "true";
       rex::cvar::SetFlagByName("freecam", on ? "false" : "true");
     });
+    // Photo mode: the world stands still while the free camera is on.
+    rex::ui::RegisterBind("bind_photo_mode", "F8", "Photo mode (free camera, world paused)", [] {
+      if (rex::cvar::GetFlagInfo("freecam_photo_mode") == nullptr) {
+        return;
+      }
+      const bool on = rex::cvar::GetFlagByName("freecam_photo_mode") == "true";
+      rex::cvar::SetFlagByName("freecam_photo_mode", on ? "false" : "true");
+      // Photo mode needs the free camera.
+      if (!on) {
+        rex::cvar::SetFlagByName("freecam", "true");
+      }
+    });
     // Frame time recording (the presenter writes one CSV per recording into
     // frame_times_dir; the launcher points it at logs\frametimes).
     rex::ui::RegisterBind("bind_record_frametimes", "F10",
@@ -293,6 +305,7 @@ class NfsmwApp : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_nfsmw_menu");
     rex::ui::UnregisterBind("bind_record_frametimes");
     rex::ui::UnregisterBind("bind_freecam");
+    rex::ui::UnregisterBind("bind_photo_mode");
     // Close an open recording cleanly.
     if (rex::cvar::GetFlagInfo("frame_times_recording") != nullptr) {
       rex::cvar::SetFlagByName("frame_times_recording", "false");

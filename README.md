@@ -19,6 +19,11 @@ runs as native code. What the SDK provides is everything *around* that: the Xbox
 kernel calls, the filesystem, audio, input, and a translation of the Xenos GPU to
 Direct3D 12 (that part is emulation: the game talks to the console's GPU directly).
 
+**This fork goes further: the game's frames are drawn by a native Direct3D 12
+renderer.** It takes the game's draw calls where its Direct3D library issues them and
+draws them itself, at up to 4× the resolution; the GPU emulation no longer draws
+anything. See [Native renderer](#native-renderer).
+
 **You need your own copy of the game.** This repository contains no game data, no
 `default.xex`, no generated C++, and no compiled binary — and it never will. See
 [Legal](#legal).
@@ -31,6 +36,44 @@ Every number below was measured on this fork (RTX 5090, 120 Hz VRR display) with
 statistics the fork adds to the log. The details and the reasoning are in the patch
 scripts and their comments.
 
+### Native renderer
+
+The game's own Direct3D calls (draws, resolves, the register shadow its D3D library
+keeps) are recorded on the game thread and drawn by a Direct3D 12 renderer of its own
+on a second thread; the GPU emulation only keeps running what the game waits for
+(fences, swaps). The picture goes to the game's window through the emulator's swap.
+Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md).
+
+| Free roam, no frame limit | GPU emulation | Native renderer |
+|---|---|---|
+| Game frames per second | 148 | **287–291** |
+| Frames actually drawn | 148 | **every one** (3.5 ms each on the renderer thread) |
+| At 4× render scale (5120 × 2880) | — | about 210 |
+| Frame times at 60 fps | 16.3–17.1 ms | **16.0–17.7 ms**, every swap shows its own frame |
+
+- **Supersampling:** the launcher's *Render scale* draws the frame at 2×, 3× or 4×
+  1280 × 720 (on top of the game's own 4× MSAA): much smoother edges, sharper textures.
+- Sun glare, shadows, reflections, the exposure and the HUD come out as on the
+  emulation; the picture was compared pixel by pixel against it.
+- New pipelines are compiled in the background, so a shader the driver has never seen
+  does not freeze the picture (one took 288–355 ms).
+
+### Free camera and photo mode
+
+**F6** switches the player's view to the game's own debug world camera, which the
+retail game has but no button reaches. **F8** is a photo mode: the world stands still
+(the simulation stops: traffic, physics, sparks) while the camera keeps flying. Both are also in the
+in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
+
+| | Keyboard | Controller |
+|---|---|---|
+| Move | W A S D | left stick |
+| Look | arrow keys | right stick |
+| Up / down | E / Q | right / left trigger |
+| Faster | Space, Backspace (even faster) | A, B |
+
+How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
+
 ### It runs, from a Windows machine, start to finish
 
 | Problem in the original | This fork |
@@ -39,6 +82,8 @@ scripts and their comments.
 | *New game* crashed with the Black Edition patch on | The Black Edition flag was written as a 32-bit value and hit the wrong byte; it is now the single byte `0x82A2CE06` |
 | Build broke on a fresh Windows checkout (libmspack symlinks checked out as text, missing first codegen, Clang not on `PATH`) | `bootstrap.ps1` pins the SDK commit and fixes the symlinks, `CONSTRUIR.bat` runs the first codegen, the environment script finds LLVM |
 | "Requires the PAL **Spain** disc" | Built and played with the **German** PAL disc; the language is picked in the launcher |
+| Sound effects (menu clicks, police radio) cut or garbled after driving a while | The XMA decoder handed a reused context's stale buffer to the game; a new sound now starts on a silent buffer ([tools/audiodiag/README.txt](tools/audiodiag/README.txt)) |
+| Windowed mode at 225 % display scaling: window larger than the screen, HUD cut off | The window opens inside the usable area of the display |
 
 ### Smooth 60 fps (and more)
 
@@ -62,7 +107,10 @@ The game now waits for its turn where it hands over a frame, as on the console, 
 Reflex-like mode lets it start the next frame (and read the controller) only once the
 previous one is out.
 
-### Correct graphics, fewer hitches
+### Correct graphics, fewer hitches (GPU emulation)
+
+These apply when the frames are drawn by the GPU emulation (`--native_renderer=false`);
+the launcher now always starts the native renderer, which has its own answers to them.
 
 | | Original | This fork |
 |---|---|---|
@@ -75,11 +123,12 @@ previous one is out.
 - New **Qt 6 launcher** (`launcher-windows/`): DPI-aware, English, dark theme; the old
   WinForms one broke with display scaling. It stays as a fallback.
 - Picks an ISO or an extracted folder and extracts the ISO itself.
-- Resolution, internal resolution scale, fullscreen, monitor, frame rate target, V-Sync,
-  anti-aliasing, anisotropic filtering, output filter and sharpness, graphics API,
-  EDRAM path, background shader compilation, shader cache status (open / clear).
-- **Advanced** tab: every switch this fork added (latency, frame pacing, texture
-  streaming, diagnostics), each with what it does and what was measured, plus a reset.
+- Always starts the **native renderer** (Direct3D 12). Resolution, render scale
+  (supersampling, the anti-aliasing), fullscreen, monitor, frame rate target, V-Sync,
+  anisotropic filtering, output filter and sharpness.
+- **Advanced** tab: latency and frame pacing (pace in the game thread, low-latency
+  mode, adaptive pacing, smoothing, display lock, one present per frame) and
+  diagnostics, each with what it does and what was measured, plus a reset.
 - Black Edition content and *Unlock everything* (the game's own `UnlockAllThings`
   debug flag; experimental — what it unlocks is up to the game).
 
@@ -87,9 +136,9 @@ previous one is out.
 
 - **English log.** The original's log messages were Spanish.
 - Every 10 s: frames the game really presents, frame-time range, present rate, latency,
-  texture cache and occlusion statistics; one line for every late frame with where
-  the time went. An optional per-stage breakdown (shaders, textures, render targets,
-  GPU waits …) for hunting a problem.
+  and the native renderer's statistics (frames drawn, time per frame, draws, uploads,
+  occlusion reports, new shaders and pipelines); one line for every late frame.
+- Host crashes write a symbolized stack to `nfsmw_crash.log` next to the game.
 
 ---
 
@@ -98,11 +147,13 @@ previous one is out.
 | Area | State |
 |---|---|
 | Boot, menus, career, free roam, races | Working |
-| Audio | Working, 5.1 output. A decoder deadlock that killed sound and froze the game on returning to the menu is fixed — see [docs/diario/audio-cuelgue.md](docs/diario/audio-cuelgue.md) |
-| Graphics (D3D12) | Working, see above |
-| Graphics (Vulkan) | Compiles and loads, renders black on Intel. Untested elsewhere; the fork's occlusion and texture fixes are D3D12 only |
+| Audio | Working, 5.1 output. A decoder deadlock that killed sound and froze the game on returning to the menu is fixed — see [docs/diario/audio-cuelgue.md](docs/diario/audio-cuelgue.md); sound effects cut after driving are fixed too |
+| Graphics: native renderer (D3D12) | Working, the launcher's default. Tested in menus and free roam; see [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md) |
+| Graphics: GPU emulation (D3D12) | Working (`--native_renderer=false`) |
+| Graphics: GPU emulation (Vulkan) | Compiles and loads, renders black on Intel. Untested elsewhere; the fork's occlusion and texture fixes are D3D12 only |
 | Controller (with rumble) and keyboard | Working |
-| Internal resolution scaling | Working, up to 4× |
+| Render scale (supersampling) | Working, up to 4× (native renderer) |
+| Free camera, photo mode | Working (F6, F8) |
 | Save games | Working |
 | Multiplayer | **Not working.** The privilege gate is solved; the network layer underneath is not. See [docs/diario/red-y-privilegios.md](docs/diario/red-y-privilegios.md) |
 
@@ -159,6 +210,8 @@ Spanish.
 | [docs/lanzador.md](docs/lanzador.md) | The original launcher, its settings and how it is built |
 | [docs/rendimiento.md](docs/rendimiento.md) | Measured findings: EDRAM paths, resolution scaling, frame pacing |
 | [docs/problemas-conocidos.md](docs/problemas-conocidos.md) | What is broken and how far each one was traced |
+| [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md) | The native Direct3D 12 renderer: how it works, every stage, every measurement (English) |
+| [docs/FREECAM.md](docs/FREECAM.md) | Free camera and photo mode: controls and the game code behind them (English) |
 | [docs/diario/](docs/diario/) | Long-form write-ups of the harder diagnoses |
 
 The fork's own changes are documented where they live: the header of
@@ -170,7 +223,9 @@ and each change carries a `PARCHE LOCAL` comment in the code.
 ```
 NFSMW Recompiled/
 ├── app/                 the game application: CMake, codegen config, app subclass
-│   ├── src/             main.cpp and the ReXApp subclass with the game's quirks
+│   ├── src/             main.cpp and the ReXApp subclass with the game's quirks,
+│   │   │                the free camera (freecam.cpp)
+│   │   └── native/      the native Direct3D 12 renderer (this fork)
 │   ├── nfsmw_manifest.toml   what the code generator reads
 │   ├── overrides.toml   hand-written codegen fixes, each with its reason
 │   └── huecos.toml      generated gap list (774 entries), see HUECOS.bat
@@ -187,7 +242,8 @@ NFSMW Recompiled/
 
 ### Why the fixes are patches against the SDK
 
-Almost nothing this project fixes lives in the game application. The audio deadlock,
+Most of what this project fixes lives outside the game application (the native
+renderer and the free camera are the exceptions: they are in `app/`). The audio deadlock,
 the frame pacing, the occlusion queries, the texture heaps, the graphics API selector,
 the Xbox Live privilege gate — all of them are in ReXGlue, and they end up compiled
 into `rexruntime.dll` and `rexgpu-xenos.dll`, not into the game executable. So the

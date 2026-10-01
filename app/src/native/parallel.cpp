@@ -893,11 +893,21 @@ extern "C" REX_FUNC(sub_825A3AF0) {
   }
   // NFSMW_DUMP_IMAGE=<file>: the loaded game image (0x82000000, 13 MB) once,
   // for reverse engineering.
+  // NFSMW_DUMP_IMAGE_EVERY=<seconds>: <file>.<n> every so often (to find
+  // variables by how they change).
   static bool image_dumped = false;
-  if (!image_dumped) {
-    image_dumped = true;
-    if (const char* path = std::getenv("NFSMW_DUMP_IMAGE")) {
-      if (FILE* out = std::fopen(path, "wb")) {
+  static auto last_dump = std::chrono::steady_clock::now();
+  static int dump_index = 0;
+  if (const char* path = std::getenv("NFSMW_DUMP_IMAGE")) {
+    const char* every = std::getenv("NFSMW_DUMP_IMAGE_EVERY");
+    const auto now = std::chrono::steady_clock::now();
+    if (!image_dumped ||
+        (every && now - last_dump > std::chrono::milliseconds(int(std::atof(every) * 1000)))) {
+      image_dumped = true;
+      last_dump = now;
+      const std::string name =
+          every ? std::string(path) + "." + std::to_string(dump_index++) : std::string(path);
+      if (FILE* out = std::fopen(name.c_str(), "wb")) {
         std::fwrite(base + 0x82000000u, 1, 13434880, out);
         std::fclose(out);
       }

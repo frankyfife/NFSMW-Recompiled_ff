@@ -471,6 +471,20 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
                          "keys / right stick. Up and down: E and Q / triggers. Faster: Space or "
                          "Backspace / A or B. The car gets no input meanwhile.");
       ImGui::Spacing();
+      if (ExisteCvar("freecam_photo_mode")) {
+        bool foto = CvarB("freecam_photo_mode");
+        if (ImGui::Checkbox("Photo mode: world paused (F8)", &foto)) {
+          SetCvarB("freecam_photo_mode", foto);
+          if (foto) {
+            SetCvarB("freecam", true);
+          }
+        }
+        MarcaVivo("(applies instantly)");
+        ImGui::TextColored(ImColor(kTextoAtenuado),
+                           "Traffic, physics and effects stand still while the free camera "
+                           "moves; F8 again lets the world run on.");
+        ImGui::Spacing();
+      }
     }
 
     if (ExisteCvar("grant_user_privileges")) {
