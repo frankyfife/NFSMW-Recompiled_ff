@@ -421,6 +421,28 @@ QWidget* LauncherWindow::buildContent() {
   left->addWidget(gameOpts);
   left->addStretch();
 
+  // ---- Effects & detail (first in the column: the picture's look) ----
+  auto* effects = new Card(QStringLiteral("Effects & detail"));
+  postProcessing_ = new ToggleSwitch(
+      QStringLiteral("Post-processing (colour grading, bloom, motion blur)"));
+  effects->addWide(postProcessing_);
+  carLod_ = new ToggleSwitch(QStringLiteral("Cars at full detail at any distance"));
+  effects->addWide(carLod_);
+  mipmaps_ = new Segmented(
+      {QStringLiteral("Game"), QStringLiteral("Sharper"), QStringLiteral("Off")});
+  effects->addRow(QStringLiteral("Mipmaps"), mipmaps_);
+  effects->grid()->addWidget(
+      note(QStringLiteral("Post-processing off shows the plain picture, without the game's "
+                          "green-yellow tint. Cars at full detail: the game switches a car to "
+                          "simpler models below 120 pixels of 720p. Mipmaps: Sharper uses one "
+                          "level finer textures, Off only the full-size ones (sharpest, distant "
+                          "surfaces shimmer). All three also live in the ESC menu.")),
+      effects->grid()->rowCount(), 0, 1, 2);
+  connect(postProcessing_, &ToggleSwitch::toggled, this, onChange);
+  connect(carLod_, &ToggleSwitch::toggled, this, onChange);
+  connect(mipmaps_, &Segmented::currentIndexChanged, this, onChange);
+  right->addWidget(effects);
+
   // ---- Frame rate ----
   auto* frame = new Card(QStringLiteral("Frame rate"));
   fps_ = new Segmented({QStringLiteral("30 · Original"), QStringLiteral("60"),
@@ -452,28 +474,11 @@ QWidget* LauncherWindow::buildContent() {
   msaa_ = new Segmented({QStringLiteral("Off"), QStringLiteral("2×"), QStringLiteral("4× · Game"),
                          QStringLiteral("8×")});
   image->addRow(QStringLiteral("MSAA"), msaa_);
-  mipmaps_ = new Segmented(
-      {QStringLiteral("Game"), QStringLiteral("Sharper"), QStringLiteral("Off")});
-  image->addRow(QStringLiteral("Mipmaps"), mipmaps_);
-  connect(mipmaps_, &Segmented::currentIndexChanged, this, onChange);
-  postProcessing_ = new ToggleSwitch(
-      QStringLiteral("Post-processing (colour grading, bloom, motion blur)"));
-  image->addWide(postProcessing_);
-  carLod_ = new ToggleSwitch(QStringLiteral("Cars at full detail at any distance"));
-  image->addWide(carLod_);
-  connect(carLod_, &ToggleSwitch::toggled, this, onChange);
   image->grid()->addWidget(
       note(QStringLiteral("MSAA: the samples of the targets the game draws with multisampling, "
-                          "on top of the render scale. Mipmaps: Sharper uses one level "
-                          "finer textures, Off only the full-size ones (sharpest, distant "
-                          "surfaces shimmer). Cars at full detail: the game switches a car to "
-                          "simpler models below 120 pixels of 720p. Post-processing off "
-                          "shows the plain "
-                          "picture, without the game's green-yellow tint; also live in the ESC "
-                          "menu.")),
+                          "on top of the render scale.")),
       image->grid()->rowCount(), 0, 1, 2);
   connect(msaa_, &Segmented::currentIndexChanged, this, onChange);
-  connect(postProcessing_, &ToggleSwitch::toggled, this, onChange);
   filter_ = new Segmented({QStringLiteral("Bilinear"), QStringLiteral("CAS"), QStringLiteral("FSR")});
   image->addRow(QStringLiteral("Output filter"), filter_);
   auto* sharpRow = new QWidget;

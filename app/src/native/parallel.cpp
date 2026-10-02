@@ -62,6 +62,16 @@ REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
 REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
                      "With native_renderer: background threads that create pipelines (0 = "
                      "when first needed, the renderer waits)");
+REXCVAR_DEFINE_BOOL(native_renderer_copy_draw_data, true, "Debug",
+                    "With native_renderer: draw UP and non-indexed draws from their vertex data "
+                    "as it was when the game drew them (false: only count where it differs)");
+REXCVAR_DEFINE_BOOL(native_renderer_hold_incomplete, true, "Debug",
+                    "With native_renderer: a frame with draws still waiting for their pipeline "
+                    "is not shown (the previous one stays, at most 30 frames)");
+REXCVAR_DEFINE_BOOL(native_renderer_bound_lead, true, "Debug",
+                    "With native_renderer: the game starts a frame only once the renderer has "
+                    "finished the previous one (50 ms at most), so memory it refills is never "
+                    "older than what the renderer draws");
 REXCVAR_DEFINE_INT32(native_renderer_mipmaps, 0, "Debug",
                      "With native_renderer: texture mipmaps (0 = the game's, 1 = one level "
                      "sharper, 2 = off: only the largest level)");
@@ -129,6 +139,12 @@ const std::array<uint16_t, kShadowCount>& ShadowRegisters() {
 }
 constexpr uint32_t kDeviceVertexShader = 12948, kDevicePixelShader = 12944,
                    kDeviceIndexBuffer = 12532;
+// Vertex streams (SetStreamSource sub_8258D968: offset and buffer at +12556
+// + 8 s, stride / 4 as a byte at +12688 + s), the vertex declaration (its
+// stream count - 1 at +12) and the shadow of fetch constant 95 (stream 0;
+// the flush sub_825A2D80 writes stream s to fetch constant 95 - s).
+constexpr uint32_t kDeviceStreams = 12556, kDeviceStreamStrides = 12688,
+                   kDeviceVertexDeclaration = 11408, kDeviceFetch95 = 1912;
 constexpr uint32_t kIndirectLoad = 0xC0012700;   // PM4 IM_LOAD, 2 dwords
 constexpr uint32_t kImmediateLoad = 0xC0002B00;  // PM4 IM_LOAD_IMMEDIATE (count in 16:29)
 
@@ -159,6 +175,9 @@ struct Item {
   bool up = false;
   uint32_t up_address = 0, up_dwords = 0;
   uint32_t vs_code = 0, vs_dwords = 0, ps_code = 0, ps_dwords = 0;  // offsets in Frame::code
+  // The vertex data copied for the draw: [begin, end) in Frame::copies.
+  uint32_t copies_begin = 0, copies_end = 0;
+  uint32_t stream0_stride_words = 0;  // the draw's stride of fetch constant 95
   // Resolve.
   int32_t rect[4] = {};
   bool has_rect = false;
@@ -167,6 +186,21 @@ struct Item {
   bool has_point = false;
   uint32_t slice = 0;
 };
+
+// Limits of the vertex data copied on the game thread (larger draws are
+// drawn from memory as before, and counted).
+constexpr uint32_t kMaxCopyBytesPerRange = 1u << 20;
+constexpr uint32_t kMaxCopyBytesPerFrame = 4u << 20;
+
+// Copies guest memory that may not be committed: false if it faults.
+bool GuardedCopy(uint8_t* dest, const uint8_t* source, size_t size) {
+  __try {
+    std::memcpy(dest, source, size);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
 
 struct Frame {
   std::vector<uint32_t> registers;  // register changes (see kChunk)
@@ -181,6 +215,19 @@ struct Frame {
   std::unordered_map<uint32_t, uint64_t> code_hashes;
   uint32_t front_buffer = 0;
   uint64_t serial = 0;  // the game's swap count when the frame was complete
+  // Vertex data of UP and non-indexed draws as it was at the draw (offset in
+  // copy_bytes; size 0: not copied, drawn from memory as before).
+  struct Copy {
+    uint32_t address, offset, size;
+  };
+  std::vector<Copy> copies;
+  std::vector<uint8_t> copy_bytes;
+  // A BeginVertices range: filled by the game after the call returns, copied
+  // at the next call into the library on that thread (or at the swap).
+  int32_t pending_copy = -1;
+  // Draws recorded after a shader load scan that failed (which vertex shader
+  // the library had loaded is not known): the frame is not shown.
+  uint32_t uncertain_draws = 0;
   // The last patched shader copy (AddCodeCopy).
   bool last_copy_valid = false;
   uint32_t last_copy_address = 0, last_copy_offset = 0;
@@ -201,6 +248,16 @@ struct Frame {
     code_by_address.clear();
     code_hashes.clear();
     front_buffer = 0;
+    if (copies.capacity() < 4096) {
+      copies.reserve(4096);
+    }
+    if (copy_bytes.capacity() < kMaxCopyBytesPerFrame) {
+      copy_bytes.reserve(kMaxCopyBytesPerFrame);
+    }
+    copies.clear();
+    copy_bytes.clear();
+    pending_copy = -1;
+    uncertain_draws = 0;
     last_copy_valid = false;
   }
 };
@@ -274,6 +331,10 @@ class Parallel {
                    bool may_change);
   uint32_t AddCodeCopy(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
   uint32_t AddCodeCopyLookup(const std::vector<uint8_t>& code, uint32_t address, uint64_t hash);
+  // Vertex data copies (mutex_ held).
+  void AddCopy(const uint8_t* physical, uint32_t address, uint32_t size, bool now);
+  void TakePendingCopy(const uint8_t* physical);
+  void CopyPoint();
 
   std::mutex mutex_;  // guards recording_ (game threads)
   // The shadow as last recorded (big-endian); invalid at the start of a frame,
@@ -301,6 +362,19 @@ class Parallel {
   // Shader load scans whose packets did not end where the library stopped
   // writing (their loads are not used).
   std::atomic<uint64_t> walks_misaligned_{0};
+  // Since the last scan that failed, until the next one that found a vertex
+  // shader load (or the swap): the vertex shader in use is not known.
+  bool vs_uncertain_ = false;
+  // The thread that records draws (BeginVertices ranges are only copied on
+  // it: another thread could get there before the game has filled them).
+  std::atomic<uint32_t> record_thread_{0};
+  // Vertex data: bytes copied, ranges over the limits or unreadable.
+  std::atomic<uint64_t> copied_bytes_{0}, copies_refused_{0};
+  // Swaps at which the game waited for the renderer to finish the previous
+  // frame (native_renderer_bound_lead), and waits that ran out.
+  std::atomic<uint64_t> lead_waits_{0}, lead_wait_timeouts_{0};
+  // Frames not shown because draws waited for their pipeline.
+  std::atomic<uint64_t> frames_held_{0}, frames_held_uncertain_{0}, frames_held_stride_{0};
   std::vector<uint8_t> scanned_vs_code_;
   uint64_t scanned_vs_hash_ = 0;
 
@@ -319,11 +393,93 @@ class Parallel {
   std::condition_variable shown_cv_;
   // Swaps that showed an older frame than the game's newest (1, 2, 3+ behind).
   std::atomic<uint64_t> late_swaps_[3] = {};
+  // Swaps whose wait for the renderer (50 ms) ran out.
+  std::atomic<uint64_t> swap_wait_timeouts_{0};
  private:
 
  public:
   std::atomic<replay::Renderer*> renderer_{nullptr};
 };
+
+// This thread recorded a BeginVertices range that may still need copying
+// (CopyPoint then takes the mutex; otherwise it returns right away).
+thread_local bool t_copy_pending = false;
+
+void Parallel::AddCopy(const uint8_t* physical, uint32_t address, uint32_t size, bool now) {
+  Frame& f = *recording_;
+  Frame::Copy c = {address, 0, 0};
+  f.copies.push_back(c);
+  const int32_t index = int32_t(f.copies.size() - 1);
+  if (now) {
+    // Size stays 0 until the bytes are in.
+    const uint32_t offset = uint32_t(f.copy_bytes.size());
+    if (!size || size > kMaxCopyBytesPerRange || offset + size > kMaxCopyBytesPerFrame ||
+        uint64_t(address) + size > 0x20000000) {
+      ++copies_refused_;
+      return;
+    }
+    f.copy_bytes.resize(offset + size);
+    if (!GuardedCopy(f.copy_bytes.data() + offset, physical + address, size)) {
+      f.copy_bytes.resize(offset);
+      ++copies_refused_;
+      return;
+    }
+    f.copies[index].offset = offset;
+    f.copies[index].size = size;
+    copied_bytes_ += size;
+  } else {
+    // Filled after the call returns: the size waits in the copy until then.
+    f.copies[index].offset = size;
+    f.pending_copy = index;
+    t_copy_pending = true;
+  }
+}
+
+void Parallel::TakePendingCopy(const uint8_t* physical) {
+  Frame& f = *recording_;
+  if (f.pending_copy < 0) {
+    return;
+  }
+  Frame::Copy& c = f.copies[f.pending_copy];
+  f.pending_copy = -1;
+  const uint32_t size = c.offset;
+  c.offset = 0;
+  const uint32_t offset = uint32_t(f.copy_bytes.size());
+  if (!size || size > kMaxCopyBytesPerRange || offset + size > kMaxCopyBytesPerFrame ||
+      uint64_t(c.address) + size > 0x20000000) {
+    ++copies_refused_;
+    return;
+  }
+  f.copy_bytes.resize(offset + size);
+  if (!GuardedCopy(f.copy_bytes.data() + offset, physical + c.address, size)) {
+    f.copy_bytes.resize(offset);
+    ++copies_refused_;
+    return;
+  }
+  c.offset = offset;
+  c.size = size;
+  copied_bytes_ += size;
+}
+
+// A call into the library that is not recorded: the last BeginVertices
+// range is filled if the call is on the recording thread.
+void Parallel::CopyPoint() {
+  if (!t_copy_pending) {
+    return;
+  }
+  if (GetCurrentThreadId() != record_thread_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  t_copy_pending = false;
+  auto* kernel = rex::system::kernel_state();
+  const uint8_t* physical =
+      kernel && kernel->memory() ? kernel->memory()->physical_membase() : nullptr;
+  if (!physical) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  TakePendingCopy(physical);
+}
 
 uint32_t Parallel::AddCode(const uint8_t* physical, uint32_t address, uint32_t& dwords_out,
                            bool may_change) {
@@ -406,6 +562,7 @@ thread_local uint32_t t_segment_start = 0;
 void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t* base) {
   if (entry == kEntrySegment) {
     t_segment_start = result;
+    CopyPoint();
     return;
   }
   auto* kernel = rex::system::kernel_state();
@@ -416,10 +573,26 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
   const bool draw = entry == kEntryDrawIndexed || entry == kEntryDrawVertices ||
                     entry == kEntryBeginVertices;
   if (!draw && entry != kEntryResolve) {
+    // Any other call into the library (lock, unlock, kickoff, range flush...)
+    // comes after the game filled the last BeginVertices range.
+    CopyPoint();
+    return;
+  }
+  // BeginVertices that got no memory draws nothing.
+  if (entry == kEntryBeginVertices && !result) {
+    CopyPoint();
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
   Frame& f = *recording_;
+  if (draw) {
+    record_thread_.store(GetCurrentThreadId(), std::memory_order_relaxed);
+    if (vs_uncertain_) {
+      ++f.uncertain_draws;
+    }
+  }
+  // The previous BeginVertices range is complete now.
+  TakePendingCopy(physical);
   Item item;
   // The shadow as it is in guest memory (big-endian; the renderer thread
   // swaps it), only what changed. Changes of an item that is not recorded
@@ -485,6 +658,46 @@ void Parallel::Record(int entry, const uint32_t* args, uint32_t result, uint8_t*
       item.up_address = GuestToPhysical(result);
       item.up_dwords = args[2] * args[3] / 4;
     }
+    // The stride the vertex shader must read stream 0 with: a UP draw's from
+    // its call, the others' from the device (SetStreamSource). Normal frames
+    // agree; a few frames per 10 s did not, and the HUD was drawn with a
+    // shader patched for another layout.
+    if (item.up) {
+      item.stream0_stride_words = args[3] / 4;
+    } else if (LoadBE32(device + kDeviceStreams + 4)) {
+      item.stream0_stride_words = device[kDeviceStreamStrides];
+    }
+    // The vertex data as it is now (see Renderer::ApplyDataCopies).
+    item.copies_begin = uint32_t(f.copies.size());
+    if (item.up) {
+      AddCopy(physical, item.up_address, item.up_dwords * 4, false);
+    } else if (entry == kEntryDrawVertices) {
+      // (dev, prim, start, count): every stream of the vertex declaration,
+      // stream s through fetch constant 95 - s (its shadow at device +1912 -
+      // 8 s, written by the flush of this draw), stride at device +12688 + s.
+      const uint32_t declaration = LoadBE32(device + kDeviceVertexDeclaration);
+      const uint32_t streams =
+          declaration ? std::min<uint32_t>(LoadBE32(base + declaration + 12) + 1, 16) : 0;
+      const uint64_t start = args[2], count = args[3];
+      for (uint32_t s = 0; s < streams; ++s) {
+        if (!LoadBE32(device + kDeviceStreams + 8 * s + 4)) {
+          continue;
+        }
+        const uint32_t d0 = LoadBE32(device + kDeviceFetch95 - 8 * s);
+        const uint32_t d1 = LoadBE32(device + kDeviceFetch95 - 8 * s + 4);
+        const uint64_t stride = uint64_t(device[kDeviceStreamStrides + s]) * 4;
+        if ((d0 & 3) != 3 || !stride) {
+          continue;
+        }
+        const uint64_t address = d0 & 0x1FFFFFFC, size = d1 & 0x03FFFFFC;
+        const uint64_t first = start * stride;
+        const uint64_t last = std::min<uint64_t>((start + count) * stride, size);
+        if (first < last && address + last <= 0x20000000) {
+          AddCopy(physical, uint32_t(address + first), uint32_t(last - first), true);
+        }
+      }
+    }
+    item.copies_end = uint32_t(f.copies.size());
     // The vertex shader the library loads (it patches some into scratch
     // memory), else the object's; the pixel shader object's.
     const uint32_t vs_object = LoadBE32(device + kDeviceVertexShader);
@@ -553,6 +766,7 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
     scanned_vs_ = address;
     scanned_vs_dwords_ = dwords;
     scanned_vs_copied_ = false;
+    vs_uncertain_ = false;
     scanned_vs_object_ = LoadBE32(base + device + kDeviceVertexShader);
   };
   const uint32_t vs_object = LoadBE32(base + device + kDeviceVertexShader);
@@ -611,6 +825,10 @@ void Parallel::ShaderLoadsWritten(uint8_t* base, uint32_t device, uint32_t befor
   // packets are not walked).
   if (walk_end > after + 4 || walk_end + 4 < after) {
     ++walks_misaligned_;
+    // The previous patch stays for the same object, but the library may just
+    // have loaded another one (BeginVertices patches for its own stride): HUD
+    // quads came out as white stripes and triangles for a frame.
+    vs_uncertain_ = true;
     return;
   }
   if (load_address) {
@@ -632,6 +850,13 @@ void Parallel::SwapDone() {
   std::unique_ptr<Frame> done;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    {
+      auto* kernel = rex::system::kernel_state();
+      if (const uint8_t* physical =
+              kernel && kernel->memory() ? kernel->memory()->physical_membase() : nullptr) {
+        TakePendingCopy(physical);
+      }
+    }
     done = std::move(recording_);
     {
       std::lock_guard<std::mutex> handoff(handoff_mutex_);
@@ -644,16 +869,37 @@ void Parallel::SwapDone() {
     }
     recording_->Clear();
     last_shadow_valid_ = false;
+    vs_uncertain_ = false;
   }
   ++frames_recorded_;
   done->serial = ++swap_serial_total_;
-  std::lock_guard<std::mutex> handoff(handoff_mutex_);
-  if (pending_) {
-    ++frames_dropped_;  // the thread has not taken the previous one yet
-    free_frames_.push_back(std::move(pending_));
+  const uint64_t serial = done->serial;
+  {
+    std::lock_guard<std::mutex> handoff(handoff_mutex_);
+    if (pending_) {
+      ++frames_dropped_;  // the thread has not taken the previous one yet
+      free_frames_.push_back(std::move(pending_));
+    }
+    pending_ = std::move(done);
+    handoff_cv_.notify_one();
   }
-  pending_ = std::move(done);
-  handoff_cv_.notify_one();
+  // The game may not get more than a frame ahead of the renderer: it starts
+  // the next frame only once the renderer has finished the previous one.
+  // Memory the game refills (the command ring, buffers in rotation, locked
+  // buffers whose fence only the emulated GPU waits for) is then never older
+  // than what the renderer is drawing. 50 ms at most.
+  // (Only once the renderer runs: if it could not start, or is starting,
+  // the waits would only cost 50 ms each.)
+  if (REXCVAR_GET(native_renderer_bound_lead) && serial > 1 && renderer_.load()) {
+    std::unique_lock<std::mutex> lock(shown_mutex_);
+    if (shown_serial_.load() + 1 < serial) {
+      ++lead_waits_;
+      if (!shown_cv_.wait_for(lock, std::chrono::milliseconds(50),
+                              [&]() { return shown_serial_.load() + 1 >= serial; })) {
+        ++lead_wait_timeouts_;
+      }
+    }
+  }
 }
 
 void Parallel::EnsureThread() {
@@ -735,10 +981,23 @@ void Parallel::Thread() {
     }
     if (frame) {
       const auto start = std::chrono::steady_clock::now();
+      const double translate_before = renderer.stats().translate_ms;
       Render(renderer, *frame);
-      render_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                             start)
-                       .count();
+      const double frame_ms =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+              .count();
+      render_ms += frame_ms;
+      // A frame that held the renderer up (over 30 ms the game's swap waits run
+      // out and the game can overtake it): where the time went.
+      if (frame_ms > 30.0) {
+        const replay::RendererStats& fs = renderer.stats();
+        REXLOG_INFO("[native renderer] slow frame: {:.1f} ms | textures {:.1f} ms ({} loaded, {} "
+                    "again) | shader translation {:.1f} ms | sync {:.1f} ms | GPU wait {:.1f} ms "
+                    "| {} draws, {} waited for their pipeline",
+                    frame_ms, fs.texture_ms, fs.textures_loaded, fs.textures_reloaded,
+                    fs.translate_ms - translate_before, fs.sync_ms, fs.flush_ms, fs.draws,
+                    fs.draws_waiting_for_pipelines);
+      }
       ++rendered_since_log;
       ++frames_rendered_;
       {
@@ -768,6 +1027,25 @@ void Parallel::Thread() {
       if (const uint64_t misaligned = walks_misaligned_.exchange(0)) {
         REXLOG_WARN("[native renderer] {} shader load scans did not end at the write pointer",
                     misaligned);
+      }
+      {
+        static uint64_t logged_differed = 0, logged_differed_bytes = 0;
+        const uint64_t copied = copied_bytes_.exchange(0), refused = copies_refused_.exchange(0);
+        const uint64_t waits = lead_waits_.exchange(0), timeouts = lead_wait_timeouts_.exchange(0);
+        const uint64_t swap_timeouts = swap_wait_timeouts_.exchange(0);
+        const uint64_t held = frames_held_.exchange(0);
+        const uint64_t held_uncertain = frames_held_uncertain_.exchange(0);
+        const uint64_t held_stride = frames_held_stride_.exchange(0);
+        REXLOG_INFO("[native renderer] vertex data in 10 s: {} KB copied at the draws ({} ranges "
+                    "over the limits), {} draws drawn from the copy where the game had rewritten "
+                    "the memory ({} KB) | game waited for the renderer at {} swaps ({} ran out), "
+                    "swap waits that ran out {} | frames held back: draws waiting for pipelines {}, "
+                    "after a shader load scan that failed {}, vertex shader for another stride {}",
+                    copied >> 10, refused, s.draw_data_differed_total - logged_differed,
+                    (s.draw_data_differed_bytes_total - logged_differed_bytes) >> 10, waits,
+                    timeouts, swap_timeouts, held, held_uncertain, held_stride);
+        logged_differed = s.draw_data_differed_total;
+        logged_differed_bytes = s.draw_data_differed_bytes_total;
       }
       {
         static uint64_t logged_deferred = 0, logged_reloaded = 0;
@@ -840,7 +1118,9 @@ void Parallel::Thread() {
 }
 
 void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
+  static std::vector<replay::DrawDataCopy> data_copies;  // renderer thread only
   renderer.SetMipMode(std::clamp(REXCVAR_GET(native_renderer_mipmaps), 0, 2));
+  renderer.SetApplyDataCopies(REXCVAR_GET(native_renderer_copy_draw_data));
   renderer.BeginFrame();
   renderer.ResetFrameStats();
   // Registers outside the shadow stay zero (only the defaults below are set);
@@ -853,7 +1133,21 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
   const auto& shadow_registers = ShadowRegisters();
   auto* kernel = rex::system::kernel_state();
   uint8_t* guest_memory = kernel->memory()->physical_membase();
+  // NATIVE_RENDER_STALL_MS=<ms> (diagnostics): every 120th frame the renderer
+  // stops that long before the last tenth of its items (where the HUD is),
+  // as when it loads textures or shaders in the middle of a frame.
+  static const int stall_ms = [] {
+    const char* v = std::getenv("NATIVE_RENDER_STALL_MS");
+    return v ? std::atoi(v) : 0;
+  }();
+  static uint64_t stall_frames = 0;
+  const size_t stall_at =
+      (stall_ms > 0 && ++stall_frames % 120 == 0) ? frame.items.size() * 9 / 10 : SIZE_MAX;
+  size_t item_index = 0;
   for (const Item& item : frame.items) {
+    if (item_index++ == stall_at) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
+    }
     if (item.occlusion) {
       renderer.OcclusionEvent(item.reports, item.report_count, guest_memory);
       continue;
@@ -914,6 +1208,16 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
     d.vertex_shader_dwords = item.vs_dwords;
     d.pixel_shader_code = frame.code.data() + item.ps_code;
     d.pixel_shader_dwords = item.ps_dwords;
+    data_copies.clear();
+    for (uint32_t c = item.copies_begin; c < item.copies_end; ++c) {
+      const Frame::Copy& copy = frame.copies[c];
+      if (copy.size) {
+        data_copies.push_back({copy.address, copy.size, frame.copy_bytes.data() + copy.offset});
+      }
+    }
+    d.stream0_stride_words = item.stream0_stride_words;
+    d.data_copies = data_copies.data();
+    d.data_copy_count = uint32_t(data_copies.size());
     renderer.Draw(d);
     up_fetch[0] = up_fetch_saved[0];
     up_fetch[1] = up_fetch_saved[1];
@@ -926,7 +1230,31 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
       renderer.SaveResolved(frame.front_buffer, save_path, false);
     }
   }
-  renderer.PresentToShared(frame.front_buffer);
+  // A frame some of whose draws waited for their pipeline (still created in
+  // the background) is missing them: when that is the visual treatment, the
+  // whole picture is shown once without the game's colour grading (a white
+  // flash). Such a frame is not shown; the previous one stays, at most 30
+  // frames in a row.
+  // The same for a frame recorded after a shader load scan that failed.
+  // The count of frames held in a row starts again only after a complete
+  // frame: during a long run of incomplete ones the picture stops once, for
+  // 30 frames at most, and then shows them as before.
+  static uint32_t held_in_row = 0;
+  const bool waited = renderer.stats().draws_waiting_for_pipelines != 0;
+  const bool mismatched = renderer.stats().draws_stride_mismatch != 0;
+  const bool incomplete = waited || mismatched || frame.uncertain_draws;
+  if (REXCVAR_GET(native_renderer_hold_incomplete) && incomplete && held_in_row < 30) {
+    ++held_in_row;
+    ++(waited ? frames_held_ : mismatched ? frames_held_stride_ : frames_held_uncertain_);
+    // Not shown, but submitted like any frame: its GPU work, upload memory and
+    // completion callbacks (occlusion, exposure read back) go on as usual.
+    renderer.Submit();
+  } else {
+    if (!incomplete) {
+      held_in_row = 0;
+    }
+    renderer.PresentToShared(frame.front_buffer);
+  }
   if (REXCVAR_GET(native_renderer_skip_emulation)) {
     renderer.WriteBackSmallResolves(guest_memory, 64 * 1024);
   }
@@ -1022,8 +1350,10 @@ extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* inf
   {
     const uint64_t wanted = p.swap_serial_total_.load();
     std::unique_lock<std::mutex> lock(p.shown_mutex_);
-    p.shown_cv_.wait_for(lock, std::chrono::milliseconds(50),
-                         [&]() { return p.shown_serial_.load() >= wanted; });
+    if (!p.shown_cv_.wait_for(lock, std::chrono::milliseconds(50),
+                              [&]() { return p.shown_serial_.load() >= wanted; })) {
+      ++p.swap_wait_timeouts_;
+    }
   }
   replay::SharedFrame frame;
   if (!renderer->GetSharedFrame(frame)) {

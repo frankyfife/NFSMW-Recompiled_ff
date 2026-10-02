@@ -39,6 +39,15 @@ namespace replay {
 using Microsoft::WRL::ComPtr;
 
 // One draw of the frame, already decoded from the capture.
+// Bytes of guest memory a draw reads, as they were when the game drew it
+// (copied on the game thread): drawn from instead of the memory as it is when
+// the renderer gets there (see Renderer::ApplyDataCopies).
+struct DrawDataCopy {
+  uint32_t address;  // physical
+  uint32_t size;
+  const uint8_t* bytes;
+};
+
 struct DrawCall {
   const rex::graphics::RegisterFile* regs;
   uint32_t sequence;           // record sequence in the capture (for tracing)
@@ -54,6 +63,12 @@ struct DrawCall {
   uint32_t pixel_shader_address, pixel_shader_dwords;  // 0 dwords if none
   // Hashes of the microcode if the caller knows them (0 = computed here).
   uint64_t vertex_shader_hash, pixel_shader_hash;
+  // Vertex data as it was at the draw (UP and non-indexed draws), if any.
+  const DrawDataCopy* data_copies;
+  uint32_t data_copy_count;
+  // The draw's stride of stream 0 (fetch constant 95) in dwords, 0 unknown:
+  // the vertex shader must read it with that stride.
+  uint32_t stream0_stride_words;
 };
 
 struct ResolveCall {
@@ -82,7 +97,14 @@ struct RendererStats {
   uint32_t msaa_samples = 0;
   // Since the start (not reset per frame): texture memory changes seen and
   // not taken yet (see GetTexture), textures loaded again after a change.
-  uint64_t textures_changes_deferred = 0, textures_reloaded_total = 0;  // the MSAA setting's samples (0: the game's)
+  uint64_t textures_changes_deferred = 0, textures_reloaded_total = 0;
+  // Since the start: draws whose recorded vertex data differed from memory
+  // when the renderer got to them (each one a glitch before), and the bytes.
+  uint64_t draw_data_differed_total = 0, draw_data_differed_bytes_total = 0;
+  // Draws skipped because their vertex shader reads stream 0 with another
+  // stride than the draw has (this frame, and since the start).
+  uint32_t draws_stride_mismatch = 0;
+  uint64_t draws_stride_mismatch_total = 0;  // the MSAA setting's samples (0: the game's)
   uint32_t unpatched_vertex_shaders = 0;  // vertex fetches without stride
   uint32_t texture_tables_reused = 0;
   uint32_t index_ranges_reused = 0;
@@ -112,6 +134,9 @@ class Renderer {
   // Texture mipmaps: 0 the game's, 1 one level sharper, 2 off (largest
   // level only). Any time (samplers are keyed by their description).
   void SetMipMode(int32_t value) { mip_mode_ = value; }
+  // Draw from the recorded vertex data (DrawCall::data_copies) where it
+  // differs from memory; false only counts the differences.
+  void SetApplyDataCopies(bool value) { apply_data_copies_ = value; }
   // Pipelines created by this many background threads (0: when first needed,
   // on the calling thread); draws are skipped until theirs is ready.
   void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
@@ -185,6 +210,9 @@ class Renderer {
     stats_.translations = kept.translations;
     stats_.textures_changes_deferred = kept.textures_changes_deferred;
     stats_.textures_reloaded_total = kept.textures_reloaded_total;
+    stats_.draw_data_differed_total = kept.draw_data_differed_total;
+    stats_.draw_data_differed_bytes_total = kept.draw_data_differed_bytes_total;
+    stats_.draws_stride_mismatch_total = kept.draws_stride_mismatch_total;
   }
   // Guest memory as the renderer sees it (for texture loading on the CPU).
   void SetGuestMemory(const uint8_t* memory) { guest_memory_ = memory; }
@@ -283,6 +311,11 @@ class Renderer {
   int32_t anisotropic_override_ = -1;
   int32_t msaa_override_ = -1;
   int32_t mip_mode_ = 0;
+  bool apply_data_copies_ = true;
+  // Pages the last draw's recorded data was written into: synced again from
+  // memory before the next draw (other draws see the memory as today).
+  std::vector<uint32_t> overlay_pages_;
+  void ApplyDataCopies(const DrawCall& d);
   uint32_t msaa_supported_ = 0;  // highest count all formats support, 0: not asked yet
   uint32_t HostSamples(uint32_t guest_msaa);
   rex::graphics::DxbcShaderTranslator translator_;

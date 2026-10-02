@@ -1,7 +1,10 @@
-﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p')
+﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p', [string]$Record = '')
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
+# -Record <mkv>: the screen is recorded (ffmpeg ddagrab, NVENC) from the
+# first key on. Held together: <keys joined by +>*<seconds>, e.g. G+d*2
+# (gas and steer right); d / a = D / A key held (steer right / left).
 # s = S key held (count = seconds), F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
 # G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
@@ -67,7 +70,42 @@ function Shot {
   "shot $f"
 }
 $t0 = Get-Date
+$rec = $null
+if ($Record) {
+  $ff = 'D:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe'
+  # Started through .NET: Start-Process with a hidden window did not return here.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $ff
+  $psi.Arguments = "-y -v error -f lavfi -i ddagrab=output_idx=0:framerate=60:draw_mouse=0 -c:v h264_nvenc -cq 24 `"$Record`""
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardInput = $true  # q on stdin ends the recording cleanly
+  $rec = [System.Diagnostics.Process]::Start($psi)
+}
+$holdKeys = @{ 'BACK' = 0x53; 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27;
+               'Q' = 0x31; 'Z' = 0x33; 'd' = 0x44; 'a' = 0x41 }
 foreach ($step in $Keys.Split(',')) {
+  $mm = [regex]::Match($step.Trim(), '^([A-Za-z](?:\+[A-Za-z])+)\*(\d+)$')
+  if ($mm.Success) {
+    # Several keys held together for n seconds.
+    $vks = @()
+    foreach ($ch in $mm.Groups[1].Value.Split('+')) {
+      $key = if ($ch -ceq 'd' -or $ch -ceq 'a') { $ch } else { $ch.ToUpper() }
+      foreach ($kk in $holdKeys.Keys) { if ($kk -ceq $key) { $vks += $holdKeys[$kk] } }
+    }
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    foreach ($v in $vks) {
+      $ext = if ($v -ge 0x21 -and $v -le 0x28) { 1 } else { 0 }
+      [G4]::keybd_event([byte]$v, [byte][G4]::MapVirtualKey([uint32]$v, 0), $ext, [UIntPtr]::Zero)
+    }
+    Start-Sleep -Seconds ([int]$mm.Groups[2].Value)
+    foreach ($v in $vks) {
+      $ext = if ($v -ge 0x21 -and $v -le 0x28) { 1 } else { 0 }
+      [G4]::keybd_event([byte]$v, [byte][G4]::MapVirtualKey([uint32]$v, 0), 2 -bor $ext, [UIntPtr]::Zero)
+    }
+    continue
+  }
   if ($step.Trim() -eq 'F10') {
     # F10: frame time recording on/off.
     [G4]::SetForegroundWindow($h) | Out-Null
@@ -129,6 +167,11 @@ foreach ($step in $Keys.Split(',')) {
   }
 }
 $p.Refresh()
+if ($rec) {
+  $rec.StandardInput.Write('q')
+  $rec.StandardInput.Flush()
+  if (-not $rec.WaitForExit(20000)) { Stop-Process -Id $rec.Id -ErrorAction SilentlyContinue }
+}
 if ($p.HasExited) { "game exited (code $($p.ExitCode))"; return }
 Shot
 if (-not $Keep) { Stop-Process -Id $p.Id -Force; Start-Sleep -Seconds 2 }

@@ -1864,8 +1864,28 @@ void Renderer::Draw(const DrawCall& d) {
       break;
     }
   }
-  // In the running game: upload what the draw reads that changed.
+  // The library patches the vertex shader for the draw's vertex layout. A
+  // draw recorded with a shader patched for another stride (measured: a 32
+  // byte UP fan with the shader of a previous 24 byte UP draw, HUD quad lists
+  // with a 32 byte shader on 24 byte streams; the library loaded the right
+  // one where the recorder did not see it) puts every vertex somewhere else:
+  // white stripes and triangles over the HUD for a frame. Not drawn (the
+  // frame is then not shown either, see Parallel::Render).
+  if (d.stream0_stride_words) {
+    for (const auto& binding : vs_shader.vertex_bindings()) {
+      if (binding.fetch_constant == 95 && binding.stride_words &&
+          binding.stride_words != d.stream0_stride_words) {
+        ++stats_.draws_stride_mismatch;
+        ++stats_.draws_stride_mismatch_total;
+        ++stats_.draws_skipped;
+        return;
+      }
+    }
+  }
+  // In the running game: upload what the draw reads that changed (first the
+  // vertex data recorded with the draw, where the game has rewritten it).
   if (live_) {
+    ApplyDataCopies(d);
     SyncDrawData(d, vs_shader);
   }
 
@@ -2391,6 +2411,83 @@ void Renderer::SyncGuestRange(uint32_t address, uint32_t size) {
     run_size += kLivePage;
   }
   flush();
+}
+
+// The draw's recorded vertex data. The renderer draws a frame or two after
+// the game: by then the game may have refilled the memory of a UP draw (the
+// D3D library's 6 MB command ring, reused as soon as the emulated GPU has
+// passed it) or of a front end buffer (three buffers in rotation, rewritten
+// three frames later), and the HUD and front end quads were drawn with
+// vertices of other quads: giant triangles in HUD colours for a frame, when
+// an overlay changed. Where the recorded bytes differ from the memory, they
+// go into the live copy and to the GPU for this draw; the pages are synced
+// again from memory before the next draw. The pages of all copies are synced
+// and uploaded once here (one upload per page per draw: two copies into the
+// same bytes without a barrier between them would race).
+void Renderer::ApplyDataCopies(const DrawCall& d) {
+  for (uint32_t page : overlay_pages_) {
+    page_synced_frame_[page] = 0;
+  }
+  overlay_pages_.clear();
+  if (!d.data_copy_count) {
+    return;
+  }
+  std::vector<uint32_t> upload;
+  for (uint32_t i = 0; i < d.data_copy_count; ++i) {
+    const DrawDataCopy& c = d.data_copies[i];
+    if (!c.size || uint64_t(c.address) + c.size > kSharedMemorySize) {
+      continue;
+    }
+    for (uint32_t page = c.address / kLivePage, last = (c.address + c.size - 1) / kLivePage;
+         page <= last; ++page) {
+      if (page_synced_frame_[page] == frame_) {
+        continue;
+      }
+      page_synced_frame_[page] = frame_;
+      const uint32_t at = page * kLivePage;
+      bool changed = false;
+      if (!CompareAndCopy(live_copy_.get() + at, guest_memory_ + at, kLivePage, &changed)) {
+        continue;
+      }
+      page_readable_frame_[page] = frame_;
+      if (changed) {
+        page_changed_frame_[page] = frame_;
+        upload.push_back(page);
+      }
+    }
+  }
+  for (uint32_t i = 0; i < d.data_copy_count; ++i) {
+    const DrawDataCopy& c = d.data_copies[i];
+    if (!c.size || uint64_t(c.address) + c.size > kSharedMemorySize ||
+        std::memcmp(live_copy_.get() + c.address, c.bytes, c.size) == 0) {
+      continue;
+    }
+    ++stats_.draw_data_differed_total;
+    stats_.draw_data_differed_bytes_total += c.size;
+    if (!apply_data_copies_) {
+      continue;
+    }
+    std::memcpy(live_copy_.get() + c.address, c.bytes, c.size);
+    for (uint32_t page = c.address / kLivePage, last = (c.address + c.size - 1) / kLivePage;
+         page <= last; ++page) {
+      page_changed_frame_[page] = frame_;
+      upload.push_back(page);
+      overlay_pages_.push_back(page);
+    }
+  }
+  std::sort(upload.begin(), upload.end());
+  upload.erase(std::unique(upload.begin(), upload.end()), upload.end());
+  for (size_t i = 0; i < upload.size();) {
+    size_t j = i + 1;
+    while (j < upload.size() && upload[j] == upload[j - 1] + 1) {
+      ++j;
+    }
+    const uint32_t at = upload[i] * kLivePage;
+    const uint32_t size = uint32_t(j - i) * kLivePage;
+    UpdateMemory(at, live_copy_.get() + at, size);
+    stats_.bytes_uploaded += size;
+    i = j;
+  }
 }
 
 // The guest memory a draw reads: its indices and, for the index range they

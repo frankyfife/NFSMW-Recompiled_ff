@@ -585,6 +585,54 @@ shader-load writer (`sub_825A3AF0`, thousands of calls per frame) asked
 stays at 280–286 (the renderer thread's 3.2 ms per frame sets it); the menus
 run at about 650 fps.
 
+**White flashes and stripes for a frame (2026-10-02):** the user's video
+(4K, 60 fps) showed single frames with giant white, pink and cyan triangles
+and white vertical stripes where the HUD is, mostly when an overlay
+appeared. Found with a detector over screen recordings (tools/audiodiag:
+`autonav.ps1 -Record <mkv>` records with ffmpeg ddagrab + NVENC;
+`glitchscan.py` counts frames that are brighter than both neighbours while
+the neighbours agree: a wrong frame, not motion). Three causes, each with
+its own fix:
+
+1. *Vertex data read after the game refilled it.* The HUD and front end
+   draw from three vertex buffers in rotation (`ePolyDeferredRenderer`,
+   rewritten three frames later) and from BeginVertices memory in the D3D
+   library's 6 MB command ring (reused as soon as the emulated GPU has
+   passed it). The renderer reads a frame's data a frame later; when it
+   hangs longer than the 50 ms the emulator's swap waits for it (loading
+   the textures of a new area or overlay took 45-57 ms, plus the frame),
+   the game gets ahead and the data is gone. Reproduced with
+   `NATIVE_RENDER_STALL_MS=120`: 237-741 draws per 10 s whose data had
+   changed. Fixes: the recorder copies the vertex data of non-indexed draws
+   at the draw and of BeginVertices at the next library call on that
+   thread (about 2-14 MB per 10 s), the renderer draws from the copy where
+   memory differs (`native_renderer_copy_draw_data`), and the game starts a
+   frame only once the renderer has finished the previous one, 50 ms at most
+   (`native_renderer_bound_lead`). With the stall injected: 0 such draws.
+2. *Frames with draws whose pipeline was not created yet.* Pipelines are
+   created in the background and their draws skipped meanwhile; when that
+   was the visual treatment, the whole frame came out without the colour
+   grading (bright, bluish: a white flash). Such a frame is now not shown;
+   the previous one stays, at most 30 in a row
+   (`native_renderer_hold_incomplete`; a few frames per 10 s in a new area).
+3. *A vertex shader patched for another layout.* The library patches the
+   vertex shader for the draw's vertex layout and loads it in the command
+   buffer; the recorder finds the load by walking those packets. When the
+   walk fails (1-3 times per 10 s) or the load was written where the
+   recorder does not look, it kept the previous patch of the same object:
+   the HUD came out as white vertical stripes and a white quad, with the
+   HUD itself missing, for a frame (the user's "white flashes"; 1-4 per
+   minute in recordings of normal play). Now the renderer compares the
+   stride the vertex shader reads fetch constant 95 with against the draw's
+   (a UP draw's from its call, the others' from SetStreamSource) and skips
+   draws that disagree; a frame with such draws, or with draws recorded
+   after a failed walk, is not shown either. With the check, recordings of
+   normal play: 0 such frames (see the measurements below).
+
+`[native renderer] vertex data in 10 s` in the log shows all of it; frames
+over 30 ms on the renderer thread are logged with their breakdown
+(`slow frame`).
+
 **Car LOD (`car_lod_highest`, app/src/car_lod.cpp):** the car's render
 step `sub_824E0648` (found through the string "DEBUG_LOD_CUBE": its static
 initializer builds a global model the step references) asks

@@ -58,6 +58,13 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 - **Cars at full detail at any distance:** the game drops a car to simpler models once it
   covers less than 120 pixels of its 720p picture (about half of the cars on screen in
   free roam); now every car keeps its full model. On by default, live in the Esc menu.
+- **No white flashes or stripes:** single frames with giant white triangles or white
+  stripes over the HUD had three causes, each fixed and measured with screen recordings
+  (`tools/audiodiag/glitchscan.py`): vertex data the game had already refilled (now copied
+  when the game draws), frames missing draws whose pipeline was still being created, and
+  HUD draws recorded with a vertex shader patched for another layout. Frames that would
+  be incomplete are not shown (the previous one stays for a frame). Before: 1-4 such
+  frames per minute of driving; after: none in three minutes.
 - **No half-loaded textures:** the renderer draws a frame or two after the game; a
   texture whose memory changed is only reloaded once the new content is seen again a
   frame later (white or garbage textures flashed for a frame when the game was already
