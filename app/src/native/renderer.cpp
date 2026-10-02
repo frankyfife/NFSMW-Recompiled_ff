@@ -1979,6 +1979,9 @@ void Renderer::Draw(const DrawCall& d) {
           binding.stride_words != d.stream0_stride_words) {
         ++stats_.draws_stride_mismatch;
         ++stats_.draws_stride_mismatch_total;
+        if (mark_mismatch_) {
+          break;
+        }
         ++stats_.draws_skipped;
         return;
       }
@@ -2875,6 +2878,12 @@ bool Renderer::PresentToShared(uint32_t front_buffer_base) {
   list_->RSSetScissorRects(1, &scissor);
   list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   list_->DrawInstanced(3, 1, 0, 0);
+  if (mark_next_present_) {
+    mark_next_present_ = false;
+    const float magenta[4] = {1.0f, 0.0f, 1.0f, 1.0f};
+    const D3D12_RECT square = {0, 0, LONG(shared_height_ / 12), LONG(shared_height_ / 12)};
+    list_->ClearRenderTargetView(output.rtv, magenta, 1, &square);
+  }
   std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
   list_->ResourceBarrier(1, &barrier);
   // Not waiting: the next frame is recorded while the GPU draws this one; the

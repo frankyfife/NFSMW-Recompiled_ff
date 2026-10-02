@@ -138,6 +138,11 @@ class Renderer {
   // Draw from the recorded vertex data (DrawCall::data_copies) where it
   // differs from memory; false only counts the differences.
   void SetApplyDataCopies(bool value) { apply_data_copies_ = value; }
+  // NATIVE_MARK_MISMATCH (diagnostics): draws whose vertex shader reads
+  // another stride are drawn anyway, and the frame gets a magenta square in
+  // the top left corner (to see in a recording whether they are wrong).
+  bool mark_mismatch() const { return mark_mismatch_; }
+  void MarkNextPresent() { mark_next_present_ = true; }
   // Pipelines kept on disk between runs (ID3D12PipelineLibrary): created
   // pipelines are stored, and loaded instead of compiled the next time.
   // Before the first frame; SavePipelineCache writes it if it changed.
@@ -320,6 +325,8 @@ class Renderer {
   int32_t msaa_override_ = -1;
   int32_t mip_mode_ = 0;
   bool apply_data_copies_ = true;
+  bool mark_mismatch_ = std::getenv("NATIVE_MARK_MISMATCH") != nullptr;
+  bool mark_next_present_ = false;
   ComPtr<ID3D12PipelineLibrary> pipeline_library_;
   std::vector<uint8_t> pipeline_library_blob_;  // must outlive the library
   std::string pipeline_library_path_;

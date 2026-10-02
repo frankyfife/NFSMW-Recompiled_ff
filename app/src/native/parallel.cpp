@@ -1252,7 +1252,11 @@ void Parallel::Render(replay::Renderer& renderer, const Frame& frame) {
   // 30 frames at most, and then shows them as before.
   static uint32_t held_in_row = 0;
   const bool waited = renderer.stats().draws_waiting_for_pipelines != 0;
-  const bool mismatched = renderer.stats().draws_stride_mismatch != 0;
+  bool mismatched = renderer.stats().draws_stride_mismatch != 0;
+  if (mismatched && renderer.mark_mismatch()) {
+    renderer.MarkNextPresent();
+    mismatched = false;
+  }
   const bool incomplete = waited || mismatched || frame.uncertain_draws;
   if (REXCVAR_GET(native_renderer_hold_incomplete) && incomplete && held_in_row < 30) {
     ++held_in_row;

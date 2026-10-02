@@ -629,6 +629,17 @@ its own fix:
    after a failed walk, is not shown either. With the check, recordings of
    normal play: 0 such frames (see the measurements below).
 
+   Are the frames held for a stride mismatch really wrong? With
+   `NATIVE_MARK_MISMATCH=1` such draws are drawn anyway and the frame gets a
+   magenta square in the top left corner; `tools/audiodiag/markscan.py
+   <recording> 50` lists the marked frames and whether each is also a
+   one-frame glitch. In a 65 s recording (4K, 120 fps, circles in the
+   city): 11 marked frames, 2 of them the white HUD stripes (HUD missing,
+   8000+ pixels brighter than both neighbours), 1 with dark streaks from the
+   skid marks, 8 without a visible error; no large glitch in a frame without
+   the mark. So the check catches the stripes, and holding those frames
+   (about 10 per minute, at 120 fps not to be seen) stays.
+
 **Pipeline cache (`native_renderer_pipeline_cache`):** created pipelines
 are kept in an ID3D12PipelineLibrary, written to `native_pipelines.bin` next
 to the game whenever new ones were stored (checked every 10 s; a cache from
