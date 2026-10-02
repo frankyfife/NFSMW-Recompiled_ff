@@ -645,6 +645,13 @@ its own fix:
    skid marks (0 in the minute before it). Next step if those should be
    drawn instead: find where the library loads the patched shader for them.
 
+   Not a glitch: when the game pauses, the HUD goes a frame before the
+   picture darkens, and that frame can show an orange glow around a light
+   (small orange crosses in the dark frames after it). Recorded with the GPU
+   emulation (`--native_renderer=false`) too: the same frames, so the game
+   draws them like that. The glitch detector counts them (2000-4000
+   pixels); look at them before chasing one.
+
 **Pipeline cache (`native_renderer_pipeline_cache`):** created pipelines
 are kept in an ID3D12PipelineLibrary, written to `native_pipelines.bin` next
 to the game whenever new ones were stored (checked every 10 s; a cache from
