@@ -475,8 +475,12 @@ extern "C" REX_FUNC(sub_823AFBF8) {
   const bool own_cameras = step <= 0.0 && !g_fov_new_frame.load() &&
                            (photo || (REXCVAR_GET(freecam) && g_debug_frames.load() > 0));
   if (own_cameras) {
+    // With the world running, the next step hands the cameras the whole
+    // 1/60 s again: only a token time here (the free camera moves by its own
+    // clock, see sub_821751E0; this pass just hands it a new frame).
     const double dt =
-        std::clamp(std::chrono::duration<double>(now - last).count(), 0.001, 0.1);
+        photo ? std::clamp(std::chrono::duration<double>(now - last).count(), 0.001, 0.1)
+              : 0.001;
     ctx.f1.f64 = dt;
     sub_82168028(ctx, base);
     ctx.f1.f64 = dt;
