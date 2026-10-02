@@ -3220,6 +3220,7 @@ bool Renderer::PresentToShared(uint32_t front_buffer_base) {
   std::lock_guard<std::mutex> lock(shared_mutex_);
   shared_latest_ = index;
   shared_latest_value_ = shared_fence_value_;
+  shared_frame_ready_.store(true, std::memory_order_release);
   return true;
 }
 

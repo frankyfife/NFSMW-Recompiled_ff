@@ -1393,15 +1393,16 @@ extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* inf
 }
 
 // For the emulator's command processor (tools/parche_ff.py,
-// ExecutePacketType3Draw): skip the emulated draws and resolves while the
-// native renderer delivers the frames.
+// ExecutePacketType3Draw, IM_LOAD, EVENT_WRITE_ZPD): skip the emulated draws,
+// resolves and shader loads while the native renderer delivers the frames.
+// Called for every draw packet (with the tiles about 5300 a frame), so no
+// lock: before, GetSharedFrame locked the renderer's mutex every time.
 extern "C" __declspec(dllexport) bool NfsmwNativeSkipEmulation() {
   if (!REXCVAR_GET(native_renderer) || !REXCVAR_GET(native_renderer_skip_emulation)) {
     return false;
   }
   replay::Renderer* renderer = Parallel::Get().renderer_.load();
-  replay::SharedFrame frame;
-  return renderer && renderer->GetSharedFrame(frame);
+  return renderer && renderer->HasSharedFrame();
 }
 
 // The D3D library's occlusion query event (query type 9, sub_8258F810):

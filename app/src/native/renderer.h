@@ -195,6 +195,9 @@ class Renderer {
   bool PresentToShared(uint32_t front_buffer_base);
   // Thread-safe: the latest complete frame.
   bool GetSharedFrame(SharedFrame& frame);
+  // Thread-safe and without the lock: whether a frame was shared yet (the
+  // emulator asks at every draw packet and shader load).
+  bool HasSharedFrame() const { return shared_frame_ready_.load(std::memory_order_acquire); }
   // Resolves of this frame up to max_bytes go into guest memory the way the
   // GPU would write them (when the emulation no longer draws, the CPU still
   // reads some, like the brightness for the exposure). Returns how many.
@@ -478,6 +481,7 @@ class Renderer {
   std::mutex shared_mutex_;
   uint32_t shared_latest_ = 0;
   uint64_t shared_latest_value_ = 0;
+  std::atomic<bool> shared_frame_ready_{false};
   uint32_t window_width_ = 0, window_height_ = 0;
 
   RendererStats stats_;

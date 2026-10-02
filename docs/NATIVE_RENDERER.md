@@ -790,15 +790,15 @@ draws and resolves (`ExecutePacketType3Draw`) and the counting of ZPD samples.
 | Element | What runs now | Needed by the game | Native or removable |
 |---|---|---|---|
 | PM4 parsing (ring, indirect buffers, tile replays) | everything | yes: fences, swaps and interrupts are in the stream | stays; can get thinner (rows below) |
-| Register writes (type 0, `SET_CONSTANT`, `LOAD_ALU_CONSTANT`) | every value into the register file; fetch constants also mark the texture cache's bindings and the vertex buffer residency dirty | only the scratch registers, `COHER_STATUS_HOST` and the gamma ramp (`DC_LUT_*`) | the constants' bookkeeping can be skipped |
-| Shader loads (`IM_LOAD`, `IM_LOAD_IMMEDIATE`) | `PipelineCache::LoadShader`: XXH3 of the microcode, a map lookup, a `D3D12Shader` per new program | no, only the emulated draws used them | can be skipped |
-| Draw packets | parsed; per packet `NfsmwNativeSkipEmulation()`, which locks `shared_mutex_` in `Renderer::GetSharedFrame` (also per ZPD event) | no | an atomic flag set at the first shared frame instead of the lock (uncapped about 1.5 million locks per second) |
+| Register writes (type 0, `SET_CONSTANT`, `LOAD_ALU_CONSTANT`) | every value into the register file; fetch constants also clear bits for the texture cache's bindings and the vertex buffer residency. The float constants' usage check only runs while a frame is open, which with the native renderer is only inside the swap | only the scratch registers, `COHER_STATUS_HOST` and the gamma ramp (`DC_LUT_*`) | stays: a copy and a few bit operations, and the emulation needs the values if it draws again |
+| Shader loads (`IM_LOAD`, `IM_LOAD_IMMEDIATE`) | `PipelineCache::LoadShader`: XXH3 of the microcode, a map lookup, a `D3D12Shader` per new program | no, only the emulated draws used them | deferred (step 1, done) |
+| Draw packets | parsed; per packet `NfsmwNativeSkipEmulation()`, which locked `shared_mutex_` in `Renderer::GetSharedFrame` (also per ZPD event) | no | an atomic flag set at the first shared frame instead of the lock, uncapped about 1.5 million locks per second (step 1, done) |
 | Fences (`EVENT_WRITE_SHD`, `MEM_WRITE`, scratch register writeback) and the ring's read pointer | written as soon as the emulator *parses* the packet | yes | the one that matters, see below |
 | `WAIT_REG_MEM` | polls memory or a register | yes | stays |
 | `INTERRUPT` | the guest's interrupt callback | yes | stays |
 | `EVENT_WRITE_ZPD` | only `VGT_EVENT_INITIATOR`; the native renderer writes the reports | yes | native (done) |
 | `EVENT_WRITE_EXT` | fixed full-screen extents | probably not | stays (cheap) |
-| `XE_SWAP` → `IssueSwap` | `RequestSwapTexture` for the emulated front buffer (texture cache lookup, loaded from guest memory if it changed) **before** the native frame is asked for; then up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output | the swap yes, the emulated front buffer no | call `RequestSwapTexture` only when there is no native frame. A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
+| `XE_SWAP` → `IssueSwap` | `RequestSwapTexture` for the emulated front buffer (texture cache lookup, loaded from guest memory if it changed) **before** the native frame is asked for; then up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output | the swap yes, the emulated front buffer no | `RequestSwapTexture` only when there is no native frame (step 1, done). A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
 | Small resolves (≤ 64 KB, exposure) | written into guest memory by the native renderer once its GPU finished the frame | yes | native (done) |
 | Shared memory, texture cache, EDRAM / render target cache, primitive processor | idle: no draw requests anything. Textures and watched pages from before the native renderer took over stay until evicted or written | no | could be released after the takeover (video memory), low priority |
 
@@ -847,12 +847,32 @@ missing.
 
 1. Cheap, without effect on the picture: the atomic flag instead of the
    lock per draw packet; while the native renderer delivers, no
-   `RequestSwapTexture`, no shader loads and no constant bookkeeping on the
-   GPU thread. Measure the GPU thread with `tools/cpuprof` before and after.
+   `RequestSwapTexture` and no shader loads on the GPU thread. Measure the
+   GPU thread with `tools/cpuprof` before and after. **Done, not measured
+   yet** (below). The constants' bookkeeping stays (see the table).
 2. Diagnostics for the fences (which, how many, who waits and how long).
 3. Native fences and read pointer with the time-out fallback; then try
    `native_renderer_copy_draw_data` and `native_renderer_bound_lead` off.
 4. Only then option A.
+
+**Step 1 (2026-10-02, not measured yet).** `NfsmwNativeSkipEmulation`
+reads an atomic flag the renderer sets with its first shared frame instead
+of locking its mutex. The command processor asks it once per draw packet
+(`NativeRendererDraws`). While it says yes, `IM_LOAD` only remembers the
+address and `IM_LOAD_IMMEDIATE` copies the microcode (the ring is reused),
+per shader type; the first draw the emulation runs again
+(`native_renderer_skip_emulation` off, or `gpu_capture_frame`) loads them,
+so switching back draws with the right shaders. `IssueSwap` asks for the
+native frame first and requests the emulated front buffer from the texture
+cache only without one. Checked here: the SDK files and `parallel.cpp` /
+`renderer.cpp` compile with a MinGW cross compiler with no other errors than
+before (only the known MinGW differences); `generar_parche_ff.py` and the
+end-to-end check give `clean rebuild matches working SDK: True`. To measure
+on Windows: the GPU thread ("GPU Commands") with `tools/cpuprof`, before and
+after, uncapped in free roam; the picture must stay the same, and switching
+`native_renderer_skip_emulation` off while playing (F4) must let the
+emulation draw again with the right shaders (compare with
+`--native_renderer_skip_emulation=false` from the start).
 
 ## Options
 
