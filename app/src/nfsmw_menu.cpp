@@ -224,7 +224,30 @@ std::function<void()> g_pad_toggle;
 void FeedPad(ImGuiIO& io) {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
   io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-  const uint32_t b = g_pad_buttons.load();
+  // The left stick moves like the D-pad (ImGui moves the cursor only with the
+  // D-pad; the stick just scrolled, and did nothing in a list), with some
+  // hysteresis so a held stick repeats like a held D-pad.
+  static uint32_t stick_dpad = 0;  // UI thread only
+  if (io.WantTextInput) {
+    // Typing (the gamertag): W and S are the keyboard controller's left
+    // stick, and would move the cursor out of the field.
+    stick_dpad = 0;
+  } else {
+    const uint32_t stick = g_pad_left_stick.load();
+    const int32_t x = int16_t(stick), y = int16_t(stick >> 16);
+    const auto latch = [](uint32_t bit, bool on, bool off) {
+      if (on) {
+        stick_dpad |= bit;
+      } else if (off) {
+        stick_dpad &= ~bit;
+      }
+    };
+    latch(kPadLeft, x < -16000, x > -12000);
+    latch(kPadRight, x > 16000, x < 12000);
+    latch(kPadUp, y > 16000, y < 12000);
+    latch(kPadDown, y < -16000, y > -12000);
+  }
+  const uint32_t b = g_pad_buttons.load() | stick_dpad;
   const struct {
     ImGuiKey key;
     uint16_t mask;
@@ -237,17 +260,6 @@ void FeedPad(ImGuiIO& io) {
   for (const auto& k : keys) {
     io.AddKeyEvent(k.key, (b & k.mask) != 0);
   }
-  const uint32_t stick = g_pad_left_stick.load();
-  const auto axis = [](int16_t v) {
-    constexpr float kDeadZone = 7849.0f;
-    const float f = std::fabs(float(v));
-    return f < kDeadZone ? 0.0f : std::min((f - kDeadZone) / (32767.0f - kDeadZone), 1.0f);
-  };
-  const int16_t x = int16_t(stick), y = int16_t(stick >> 16);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, x < 0 && axis(x) > 0, x < 0 ? axis(x) : 0);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, x > 0 && axis(x) > 0, x > 0 ? axis(x) : 0);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, y > 0 && axis(y) > 0, y > 0 ? axis(y) : 0);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, y < 0 && axis(y) > 0, y < 0 ? axis(y) : 0);
 }
 }  // namespace
 
@@ -315,25 +327,43 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 #else
   const bool shift = false;
 #endif
-  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && !shift) {
-    selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
+  // A list open or a value being edited, now or at the end of the previous
+  // frame (B already closed it in NewFrame then): B and the section keys
+  // belong to it. Before 2026-10-02 B closed the list and the whole menu in
+  // the same frame, so the controller could not leave a list.
+  const bool busy = busy_before_ || ImGui::IsAnyItemActive() ||
+                    ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+  if (!busy) {
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && !shift) {
+      selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && !shift) {
+      selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+    }
+    // Controller: LB / RB switch section (they are also the slow / fast
+    // modifiers while a slider is edited).
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+      selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+      selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+    }
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && !shift) {
-    selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+  // B closes the list or ends the edit, then the menu. Start alone closes it
+  // when released (Back + Start is the app's toggle: Start pressed a frame
+  // before Back closed the menu and the toggle opened it again).
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
+    start_alone_ = !ImGui::IsKeyDown(ImGuiKey_GamepadBack);
   }
-  // Controller: LB / RB switch section, B (nothing being edited, no list open)
-  // or Start closes; Back + Start is the app's toggle.
-  if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
-    selected_tab_ = (selected_tab_ + kNumPestanas - 1) % kNumPestanas;
+  if (ImGui::IsKeyDown(ImGuiKey_GamepadBack)) {
+    start_alone_ = false;
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
-    selected_tab_ = (selected_tab_ + 1) % kNumPestanas;
+  const bool start_released = start_alone_ && ImGui::IsKeyReleased(ImGuiKey_GamepadStart);
+  if (start_released) {
+    start_alone_ = false;
   }
-  if (!first_draw_ && !ImGui::IsAnyItemActive() &&
-      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
-      (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
-       (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) &&
-        !ImGui::IsKeyDown(ImGuiKey_GamepadBack)))) {
+  if (!first_draw_ && !busy &&
+      (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || start_released)) {
     Close();
     return;
   }
@@ -359,6 +389,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   if (!ImGui::Begin("##nfsmw_menu", nullptr, flags)) {
     ImGui::End();
     ImGui::PopStyleVar(2);
+    busy_before_ = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
     return;
   }
 
@@ -391,7 +422,8 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
   const float y_pie = x1.y - pie;
   dl->AddLine(ImVec2(x0.x + pad, y_pie), ImVec2(x1.x - pad, y_pie), kMarco, borde);
   dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(x0.x + pad, y_pie + 6.0f), kTextoAtenuado,
-              "Up / Down or LB / RB: section   |   ESC, B or Back + Start closes");
+              "Up / Down or LB / RB: section   |   B: close list, then menu   |   "
+              "ESC or Back + Start closes");
 
   // Carril de pestanas a la izquierda.
   const float y_carril = x0.y + cabecera;
@@ -455,6 +487,21 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       Persistir();
     }
     MarcaVivo("applies instantly");
+
+    // G-Sync / FreeSync: the pacer and the presenter read it every frame.
+    if (ExisteCvar("frame_pacing_vrr")) {
+      bool vrr = CvarB("frame_pacing_vrr");
+      if (ImGui::Checkbox("G-Sync / FreeSync", &vrr)) {
+        SetCvarB("frame_pacing_vrr", vrr);
+        Persistir();
+      }
+      MarcaVivo("applies instantly");
+      ImGui::TextColored(ImColor(kTextoAtenuado),
+                         "For displays with variable refresh: the frame rate stays just under "
+                         "the refresh rate (116 fps at 120 Hz, also at Unlimited) and V-Sync "
+                         "is on: no tearing, no V-Sync lag. Above the refresh rate G-Sync "
+                         "cannot work, so Unlimited without it tears.");
+    }
 
     // Frame rate: the pacer (frame_pacing_fps), live. The old presenter limiter
     // (max_fps) would be a second clock fighting it.
@@ -661,15 +708,16 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
     if (ExisteCvar("freecam")) {
       bool libre = CvarB("freecam");
-      if (ImGui::Checkbox("Free camera (F6)", &libre)) {
+      if (ImGui::Checkbox("Free camera (F6 / L3 + R3)", &libre)) {
         SetCvarB("freecam", libre);
       }
       MarcaVivo("(applies instantly)");
       ImGui::TextColored(ImColor(kTextoAtenuado),
                          "The game's debug world camera. Move: WASD / left stick. Look: arrow "
                          "keys / right stick. Up and down: E and Q / triggers. Faster: Space or "
-                         "Backspace / A or B. Zoom: 1 and 3 / LB and RB, K / right stick click "
-                         "resets it. The car gets no input meanwhile.");
+                         "Backspace / A or B. Zoom: 1 and 3 / LB and RB, K / a right stick "
+                         "click resets it. Both stick clicks together (L3 + R3) switch it on "
+                         "and off. The car gets no input meanwhile.");
       ImGui::Spacing();
       if (ExisteCvar("freecam_fov")) {
         float fov = CvarF("freecam_fov");
@@ -808,7 +856,21 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       Persistir();
     }
     if (ImGui::Button("RESTORE DEFAULTS", ImVec2(240.0f, 0.0f))) {
-      rex::cvar::ResetAllToDefaults();
+      // The settings this menu changes while the game runs. Not all cvars:
+      // that switched the running game from the native renderer back to the
+      // emulation, without the resolve readback, at an unlimited frame rate.
+      // Display, frame rate and content options stay as the launcher set them.
+      // Set by name (ResetToDefault runs no change callbacks: game_speed went
+      // back to 100 % in the menu while the game kept its old speed).
+      for (const char* nombre :
+           {"vsync", "fov_scale", "freecam", "freecam_fov", "freecam_photo_mode", "game_speed",
+            "native_renderer_anisotropic", "native_renderer_msaa", "native_renderer_mipmaps",
+            "post_processing", "car_lod_highest", "frame_pacing_vrr"}) {
+        if (const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(nombre)) {
+          const std::string por_defecto = info->default_value;
+          rex::cvar::SetFlagByName(nombre, por_defecto);
+        }
+      }
       Persistir();
     }
     if (BotonAplicar()) {
@@ -909,6 +971,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
 
   ImGui::End();
   ImGui::PopStyleVar(2);
+  busy_before_ = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
 }
 
 // ---------------------------------------------------------------------------

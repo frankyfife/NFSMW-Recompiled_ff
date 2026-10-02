@@ -1,7 +1,8 @@
 # Free camera
 
-F6 (or the ESC menu, "Free camera") switches the player's view to the game's
-own debug world camera (`DebugWorldCameraMover`, camera action
+F6, both stick clicks together on the controller (L3 + R3), or the ESC
+menu ("Free camera") switch the player's view to the game's own debug world
+camera (`DebugWorldCameraMover`, camera action
 `CDActionDebug`). The retail game has it but no button reaches it.
 
 | | Keyboard | Controller |
@@ -11,9 +12,12 @@ own debug world camera (`DebugWorldCameraMover`, camera action
 | Up / down | E (or O) / Q (or I) | right / left trigger |
 | Faster | Space, Backspace (even faster) | A, B |
 | Zoom | 1 wider, 3 narrower, K back to 71.5° | LB, RB, right stick click |
+| On / off | F6 | L3 + R3 (both stick clicks) |
 
-The car gets no input while the free camera is on. F6 again gives the
-driving camera back. There is no collision: the camera flies through
+The car gets no input while the free camera is on. F6 (or L3 + R3) again
+gives the driving camera back. The stick clicks of the chord reach neither
+the game nor the camera; a right stick click alone resets the zoom when it
+is released (not while the left one is held). There is no collision: the camera flies through
 buildings and under the ground.
 
 **Photo mode (F8):** the world stands still while the camera keeps

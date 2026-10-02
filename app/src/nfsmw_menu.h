@@ -58,6 +58,11 @@ class NfsmwMenuDialog : public rex::ui::ImGuiDialog {
   int selected_tab_ = 0;
   bool quit_requested_ = false;
   bool first_draw_ = true;
+  // A list open or an item being edited at the end of the previous frame:
+  // ImGui takes B for those inside NewFrame, before OnDraw, so by the time
+  // OnDraw looks the list is already closed.
+  bool busy_before_ = false;
+  bool start_alone_ = false;  // Start went down without Back: closes on release
 
   char gamertag_[16];  // 15 caracteres + nulo, como un gamertag de Xbox Live
   bool gamertag_sync_ = false;

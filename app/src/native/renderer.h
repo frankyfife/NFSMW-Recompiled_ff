@@ -90,8 +90,25 @@ struct SharedFrame {
   uint32_t width = 0, height = 0;
 };
 
+// One part of a texture's data to untile into upload memory: block rows
+// [y_begin, y_end) of all z slices of one subresource (see FillTexture).
+struct TextureFill {
+  uint8_t* dest = nullptr;  // block row 0 of z slice 0 in the upload memory
+  uint32_t dest_row_pitch = 0, dest_slice_pitch = 0;
+  uint32_t source = 0;  // the array slice's guest address
+  uint32_t offset_x = 0, offset_y = 0, offset_z = 0;  // position in packed mips
+  uint32_t blocks_x = 0, y_begin = 0, y_end = 0, depth = 1;
+  uint32_t pitch_blocks = 0, z_stride_rows = 0, row_pitch_bytes = 0;
+  uint32_t bytes_per_block = 0, bpb_log2 = 0, endian = 0;
+  bool tiled = false, is_3d = false;
+};
+
 struct RendererStats {
   double sync_ms = 0, texture_ms = 0, flush_ms = 0;
+  // Of texture_ms: creating the resources; and the time the renderer thread
+  // waited for (and helped) the untiling threads before submitting.
+  double texture_create_ms = 0, texture_wait_ms = 0;
+  uint32_t texture_fills_queued = 0, texture_faults = 0;
   double translate_ms = 0, pipeline_ms = 0;  // shader translation, pipeline creation
   uint32_t translations = 0;
   uint32_t draws_waiting_for_pipelines = 0;
@@ -152,6 +169,10 @@ class Renderer {
   // Pipelines created by this many background threads (0: when first needed,
   // on the calling thread); draws are skipped until theirs is ready.
   void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
+  // Threads that untile texture data into upload memory (0: on the renderer
+  // thread, as tools/replay does). The copies are recorded at once; Submit
+  // waits for the data before the list runs.
+  void SetTextureThreads(uint32_t threads) { texture_threads_ = threads; }
 
   bool Initialize();
   // Uploads the whole guest physical memory (512 MB).
@@ -241,6 +262,21 @@ class Renderer {
                                 uint32_t format, bool depth);
   HostTexture* GetTexture(const uint32_t* fetch, bool for_cube);
   HostTexture* LoadGuestTexture(const uint32_t* fetch);
+  // Guest textures are placed in large heaps: a committed resource each took
+  // about 0.2 ms (60 of the 65 ms an area's 301 textures took to load).
+  struct TextureBlock {
+    uint32_t heap = UINT32_MAX;
+    uint64_t offset = 0, size = 0;
+  };
+  struct TextureHeap {
+    ComPtr<ID3D12Heap> heap;
+    std::map<uint64_t, uint64_t> free;  // offset -> size
+  };
+  bool PlaceTexture(D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state,
+                    ComPtr<ID3D12Resource>& resource, TextureBlock& block);
+  bool AllocateTextureBlock(uint64_t size, uint64_t alignment, TextureBlock& block);
+  void FreeTextureBlock(const TextureBlock& block);
+  std::vector<TextureHeap> texture_heaps_;
   ID3D12RootSignature* GetRootSignature(uint32_t vs_textures, uint32_t vs_samplers,
                                         uint32_t ps_textures, uint32_t ps_samplers);
   void Transition(ID3D12Resource* resource, D3D12_RESOURCE_STATES& current,
@@ -321,6 +357,18 @@ class Renderer {
   std::deque<PipelineJob> pipeline_jobs_;
   std::vector<std::thread> pipeline_workers_;
   bool pipeline_workers_stop_ = false;
+  void StartTextureWorkers();
+  void QueueTextureFill(const TextureFill& fill);
+  void WaitTextureFills();
+  uint32_t texture_threads_ = 0;
+  std::vector<std::thread> texture_workers_;
+  std::mutex texture_jobs_mutex_;
+  std::condition_variable texture_jobs_cv_, texture_done_cv_;
+  std::deque<TextureFill> texture_jobs_;
+  uint32_t texture_jobs_pending_ = 0;  // queued or running (under the mutex)
+  bool texture_workers_stop_ = false;
+  std::atomic<uint32_t> texture_faults_{0};
+  std::vector<TextureFill> texture_fills_;  // LoadGuestTexture's, reused
   int32_t anisotropic_override_ = -1;
   int32_t msaa_override_ = -1;
   int32_t mip_mode_ = 0;

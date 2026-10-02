@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <d3dcompiler.h>
@@ -28,6 +29,11 @@ namespace {
 
 constexpr uint64_t kSharedMemorySize = 0x20000000;
 constexpr uint64_t kUploadBufferSize = 256ull << 20;
+// Textures with less upload data are untiled on the renderer thread; larger
+// subresources go to the untiling threads in bands of about this much.
+constexpr uint64_t kParallelFillMinBytes = 32 << 10;
+constexpr uint32_t kFillBandBytes = 128 << 10;
+constexpr uint64_t kTextureHeapSize = 64ull << 20;
 constexpr uint32_t kViewHeapSize = 500000;
 constexpr uint32_t kSamplerHeapSize = 2048;
 constexpr uint32_t kStagingHeapSize = 65536;
@@ -211,32 +217,153 @@ uint64_t SampledHash(const uint8_t* memory, uint32_t address, uint32_t size) {
   return HashFinish(h);
 }
 
-void SwapCopy(uint8_t* dest, const uint8_t* src, uint32_t size, xenos::Endian endian) {
+// texture_util::GetTiledOffset2D/3D (rexruntime.dll), here so they inline:
+// they were called once per block across the DLL boundary.
+inline int32_t TiledOffset2D(int32_t x, int32_t y, uint32_t pitch, uint32_t bpb_log2) {
+  pitch = (pitch + 31) & ~31u;
+  int32_t macro = ((x >> 5) + (y >> 5) * int32_t(pitch >> 5)) << (bpb_log2 + 7);
+  int32_t micro = ((x & 7) + ((y & 0xE) << 2)) << bpb_log2;
+  int32_t offset = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + ((y & 1) << 4);
+  return ((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
+         (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
+}
+
+inline int32_t TiledOffset3D(int32_t x, int32_t y, int32_t z, uint32_t pitch, uint32_t height,
+                             uint32_t bpb_log2) {
+  pitch = (pitch + 31) & ~31u;
+  height = (height + 31) & ~31u;
+  int32_t macro_outer = ((y >> 4) + (z >> 2) * int32_t(height >> 4)) * int32_t(pitch >> 5);
+  int32_t macro = ((((x >> 5) + macro_outer) << (bpb_log2 + 6)) & 0xFFFFFFF) << 1;
+  int32_t micro = (((x & 7) + ((y & 6) << 2)) << (bpb_log2 + 6)) >> 6;
+  int32_t offset_outer = ((y >> 3) + (z >> 2)) & 1;
+  int32_t offset1 = offset_outer + ((((x >> 3) + (offset_outer << 1)) & 3) << 1);
+  int32_t offset2 = ((macro + (micro & ~15)) << 1) + (micro & 15) +
+                    ((z & 3) << (bpb_log2 + 6)) + ((y & 1) << 4);
+  int32_t address = (offset1 & 1) << 3;
+  address += (offset2 >> 6) & 7;
+  address <<= 3;
+  address += offset1 & ~1;
+  address <<= 2;
+  address += offset2 & ~511;
+  address <<= 3;
+  address += offset2 & 63;
+  return address;
+}
+
+// The endian mode swaps bytes within 16 or 32 bit units of guest memory.
+// Eight bytes at once (four in the low half work too); a byte at a time was
+// slow, more so writing upload memory (write-combined) byte by byte.
+inline uint64_t Swap64(uint64_t w, xenos::Endian endian) {
   switch (endian) {
     case xenos::Endian::k8in16:
-      for (uint32_t i = 0; i + 1 < size; i += 2) {
-        dest[i] = src[i + 1];
-        dest[i + 1] = src[i];
-      }
-      break;
+      return ((w & 0x00FF00FF00FF00FFull) << 8) | ((w >> 8) & 0x00FF00FF00FF00FFull);
     case xenos::Endian::k8in32:
-      for (uint32_t i = 0; i + 3 < size; i += 4) {
-        dest[i] = src[i + 3];
-        dest[i + 1] = src[i + 2];
-        dest[i + 2] = src[i + 1];
-        dest[i + 3] = src[i];
-      }
-      break;
+      w = _byteswap_uint64(w);
+      return (w << 32) | (w >> 32);
     case xenos::Endian::k16in32:
-      for (uint32_t i = 0; i + 3 < size; i += 4) {
-        dest[i] = src[i + 2];
-        dest[i + 1] = src[i + 3];
-        dest[i + 2] = src[i];
-        dest[i + 3] = src[i + 1];
+      return ((w & 0x0000FFFF0000FFFFull) << 16) | ((w >> 16) & 0x0000FFFF0000FFFFull);
+    default:
+      return w;
+  }
+}
+
+// The byte a guest byte is swapped with: blocks smaller than the swap unit
+// (8 and 16 bit formats) take theirs from the neighbouring block. (The byte
+// loop before copied nothing for them: those textures stayed zero.)
+inline uint32_t EndianXor(xenos::Endian endian) {
+  switch (endian) {
+    case xenos::Endian::k8in16:
+      return 1;
+    case xenos::Endian::k8in32:
+      return 3;
+    case xenos::Endian::k16in32:
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+template <uint32_t kBytes>
+void FillTextureRows(const uint8_t* memory, const TextureFill& f) {
+  const xenos::Endian endian = xenos::Endian(f.endian);
+  const uint32_t bpb = kBytes ? kBytes : f.bytes_per_block;
+  const uint32_t swap_xor = EndianXor(endian);
+  // Blocks under 4 bytes read their whole 32 bit unit.
+  const uint64_t limit = kSharedMemorySize - std::max<uint32_t>(bpb, 4);
+  for (uint32_t z = 0; z < f.depth; ++z) {
+    for (uint32_t y = f.y_begin; y < f.y_end; ++y) {
+      uint8_t* row = f.dest + size_t(z) * f.dest_slice_pitch + size_t(y) * f.dest_row_pitch;
+      const int32_t gx = int32_t(f.offset_x), gy = int32_t(y + f.offset_y),
+                    gz = int32_t(z + f.offset_z);
+      const uint32_t linear = f.source + uint32_t(gz) * f.z_stride_rows * f.row_pitch_bytes +
+                              uint32_t(gy) * f.row_pitch_bytes + f.offset_x * bpb;
+      for (uint32_t x = 0; x < f.blocks_x; ++x) {
+        uint32_t source;
+        if (!f.tiled) {
+          source = linear + x * bpb;
+        } else if (f.is_3d) {
+          source = f.source + uint32_t(TiledOffset3D(gx + int32_t(x), gy, gz, f.pitch_blocks,
+                                                     f.z_stride_rows, f.bpb_log2));
+        } else {
+          source = f.source + uint32_t(TiledOffset2D(gx + int32_t(x), gy, f.pitch_blocks,
+                                                     f.bpb_log2));
+        }
+        uint8_t* d = row + size_t(x) * bpb;
+        if (source > limit) {
+          std::memset(d, 0, bpb);
+          continue;
+        }
+        const uint8_t* s = memory + source;
+        if constexpr (kBytes == 4) {
+          uint32_t w;
+          std::memcpy(&w, s, 4);
+          w = uint32_t(Swap64(w, endian));
+          std::memcpy(d, &w, 4);
+        } else if constexpr (kBytes == 8) {
+          uint64_t w;
+          std::memcpy(&w, s, 8);
+          w = Swap64(w, endian);
+          std::memcpy(d, &w, 8);
+        } else if constexpr (kBytes == 16) {
+          uint64_t w[2];
+          std::memcpy(w, s, 16);
+          w[0] = Swap64(w[0], endian);
+          w[1] = Swap64(w[1], endian);
+          std::memcpy(d, w, 16);
+        } else {
+          for (uint32_t i = 0; i < bpb; ++i) {
+            d[i] = memory[(source + i) ^ swap_xor];
+          }
+        }
       }
+    }
+  }
+}
+
+void FillTexture(const uint8_t* memory, const TextureFill& f) {
+  switch (f.bytes_per_block) {
+    case 4:
+      FillTextureRows<4>(memory, f);
+      break;
+    case 8:
+      FillTextureRows<8>(memory, f);
+      break;
+    case 16:
+      FillTextureRows<16>(memory, f);
       break;
     default:
-      std::memcpy(dest, src, size);
+      FillTextureRows<0>(memory, f);
+  }
+}
+
+// The pages were readable when the texture was looked at; the game may free
+// them before a worker reads them.
+bool GuardedFillTexture(const uint8_t* memory, const TextureFill& f) {
+  __try {
+    FillTexture(memory, f);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
   }
 }
 
@@ -328,6 +455,7 @@ struct Renderer::RenderTarget {
 
 struct Renderer::HostTexture {
   ComPtr<ID3D12Resource> resource;
+  TextureBlock block;  // guest textures: where in the texture heaps
   D3D12_RESOURCE_STATES state;
   DXGI_FORMAT format;
   uint32_t width, height, array_size, mips;
@@ -374,6 +502,14 @@ Renderer::~Renderer() {
   }
   pipeline_jobs_cv_.notify_all();
   for (std::thread& worker : pipeline_workers_) {
+    worker.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(texture_jobs_mutex_);
+    texture_workers_stop_ = true;
+  }
+  texture_jobs_cv_.notify_all();
+  for (std::thread& worker : texture_workers_) {
     worker.join();
   }
   if (fence_event_) {
@@ -678,6 +814,9 @@ void Renderer::ActivateSet(uint32_t index) {
 bool Renderer::Submit() { return Submit(false); }
 
 bool Renderer::Submit(bool wait_for_all) {
+  // The list's texture copies read upload memory the untiling threads are
+  // still filling.
+  WaitTextureFills();
   // An occlusion query cannot span command lists: end it here, begin a new
   // one for the same interval in the next list.
   const bool reopen_occlusion = occlusion_open_;
@@ -981,6 +1120,88 @@ ID3D12RootSignature* Renderer::GetRootSignature(uint32_t vs_textures, uint32_t v
   return root.Get();
 }
 
+bool Renderer::AllocateTextureBlock(uint64_t size, uint64_t alignment, TextureBlock& block) {
+  // First fit over the free ranges of every heap (a few dozen: textures are
+  // only freed when the game streams another one into their memory).
+  for (uint32_t h = 0; h < texture_heaps_.size(); ++h) {
+    auto& free = texture_heaps_[h].free;
+    for (auto it = free.begin(); it != free.end(); ++it) {
+      const uint64_t begin = it->first, end = it->first + it->second;
+      const uint64_t start = (begin + alignment - 1) & ~(alignment - 1);
+      if (start + size > end) {
+        continue;
+      }
+      free.erase(it);
+      if (start > begin) {
+        free.emplace(begin, start - begin);
+      }
+      if (end > start + size) {
+        free.emplace(start + size, end - (start + size));
+      }
+      block = {h, start, size};
+      return true;
+    }
+  }
+  D3D12_HEAP_DESC desc = {};
+  desc.SizeInBytes = std::max<uint64_t>(kTextureHeapSize, (size + 0xFFFF) & ~uint64_t(0xFFFF));
+  desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+  desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+  desc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
+  TextureHeap heap;
+  if (FAILED(device_->CreateHeap(&desc, IID_PPV_ARGS(&heap.heap)))) {
+    return false;
+  }
+  heap.free.emplace(size, desc.SizeInBytes - size);
+  if (desc.SizeInBytes == size) {
+    heap.free.clear();
+  }
+  texture_heaps_.push_back(std::move(heap));
+  block = {uint32_t(texture_heaps_.size() - 1), 0, size};
+  return true;
+}
+
+void Renderer::FreeTextureBlock(const TextureBlock& block) {
+  auto& free = texture_heaps_[block.heap].free;
+  auto it = free.emplace(block.offset, block.size).first;
+  const auto next = std::next(it);
+  if (next != free.end() && it->first + it->second == next->first) {
+    it->second += next->second;
+    free.erase(next);
+  }
+  if (it != free.begin()) {
+    const auto previous = std::prev(it);
+    if (previous->first + previous->second == it->first) {
+      previous->second += it->second;
+      free.erase(it);
+    }
+  }
+}
+
+bool Renderer::PlaceTexture(D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state,
+                            ComPtr<ID3D12Resource>& resource, TextureBlock& block) {
+  // 4 KB alignment where the texture is small enough, else 64 KB.
+  desc.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
+  D3D12_RESOURCE_ALLOCATION_INFO info = device_->GetResourceAllocationInfo(0, 1, &desc);
+  if (info.Alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT) {
+    desc.Alignment = 0;
+    info = device_->GetResourceAllocationInfo(0, 1, &desc);
+  }
+  if (info.SizeInBytes == UINT64_MAX || !info.SizeInBytes ||
+      !AllocateTextureBlock(info.SizeInBytes, std::max<uint64_t>(info.Alignment, 4096), block)) {
+    return false;
+  }
+  // The memory may have held a freed texture (the GPU is done with it): a
+  // texture that is neither render target nor depth is fully initialized by
+  // the copies that follow.
+  if (FAILED(device_->CreatePlacedResource(texture_heaps_[block.heap].heap.Get(), block.offset,
+                                           &desc, state, nullptr, IID_PPV_ARGS(&resource)))) {
+    FreeTextureBlock(block);
+    block = {};
+    return false;
+  }
+  return true;
+}
+
 Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
   xenos::xe_gpu_texture_fetch_t fetch;
   std::memcpy(&fetch, words, sizeof(fetch));
@@ -1038,11 +1259,13 @@ Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
   desc.MipLevels = uint16_t(levels);
   desc.Format = host.format;
   desc.SampleDesc.Count = 1;
-  D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
   texture->state = D3D12_RESOURCE_STATE_COPY_DEST;
-  if (FAILED(device_->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &desc,
-                                              texture->state, nullptr,
-                                              IID_PPV_ARGS(&texture->resource)))) {
+  const auto create_start = std::chrono::steady_clock::now();
+  const bool created = PlaceTexture(desc, texture->state, texture->resource, texture->block);
+  stats_.texture_create_ms += std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - create_start)
+                                  .count();
+  if (!created) {
     ++stats_.textures_unsupported;
     return nullptr;
   }
@@ -1058,7 +1281,9 @@ Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
   uint64_t upload_offset;
   uint8_t* upload = AllocateUpload(uint32_t(total), D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, gpu,
                                    &upload_buffer, &upload_offset);
-  std::memset(upload, 0, size_t(total));
+  // Every block of every subresource is written (zero where the guest
+  // address is out of range), so the memory needs no clearing first.
+  texture_fills_.clear();
   for (uint32_t level = 0; level < levels; ++level) {
     const uint32_t guest_level = std::min(level, layout.packed_level);
     const texture_util::TextureGuestLayout::Level& level_layout =
@@ -1081,33 +1306,26 @@ Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
       const uint32_t slice_address = level_address + slice * level_layout.array_slice_stride_bytes;
       const uint32_t sub = slice * levels + level;
       const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp = footprints[sub];
-      for (uint32_t z = 0; z < level_depth; ++z) {
-      uint8_t* dest = upload + fp.Offset + size_t(z) * fp.Footprint.RowPitch * rows[sub];
-      for (uint32_t y = 0; y < blocks_y && y < rows[sub]; ++y) {
-        for (uint32_t x = 0; x < blocks_x; ++x) {
-          uint32_t source;
-          if (fetch.tiled) {
-            source = slice_address +
-                     uint32_t(is_3d ? texture_util::GetTiledOffset3D(
-                                          int32_t(x + offset_x), int32_t(y + offset_y),
-                                          int32_t(z + offset_z), pitch_blocks, z_stride_rows,
-                                          bpb_log2)
-                                    : texture_util::GetTiledOffset2D(int32_t(x + offset_x),
-                                                                     int32_t(y + offset_y),
-                                                                     pitch_blocks, bpb_log2));
-          } else {
-            source = slice_address + (z + offset_z) * z_stride_rows * level_layout.row_pitch_bytes +
-                     (y + offset_y) * level_layout.row_pitch_bytes +
-                     (x + offset_x) * bytes_per_block;
-          }
-          if (uint64_t(source) + bytes_per_block > kSharedMemorySize) {
-            continue;
-          }
-          SwapCopy(dest + y * fp.Footprint.RowPitch + x * bytes_per_block, guest_memory_ + source,
-                   bytes_per_block, fetch.endianness);
-        }
-      }
-      }
+      TextureFill fill;
+      fill.dest = upload + fp.Offset;
+      fill.dest_row_pitch = fp.Footprint.RowPitch;
+      fill.dest_slice_pitch = fp.Footprint.RowPitch * rows[sub];
+      fill.source = slice_address;
+      fill.offset_x = offset_x;
+      fill.offset_y = offset_y;
+      fill.offset_z = offset_z;
+      fill.blocks_x = blocks_x;
+      fill.y_end = std::min(blocks_y, uint32_t(rows[sub]));
+      fill.depth = level_depth;
+      fill.pitch_blocks = pitch_blocks;
+      fill.z_stride_rows = z_stride_rows;
+      fill.row_pitch_bytes = level_layout.row_pitch_bytes;
+      fill.bytes_per_block = bytes_per_block;
+      fill.bpb_log2 = bpb_log2;
+      fill.endian = uint32_t(fetch.endianness);
+      fill.tiled = fetch.tiled;
+      fill.is_3d = is_3d;
+      texture_fills_.push_back(fill);
       D3D12_TEXTURE_COPY_LOCATION dst = {};
       dst.pResource = texture->resource.Get();
       dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -1118,6 +1336,19 @@ Renderer::HostTexture* Renderer::LoadGuestTexture(const uint32_t* words) {
       src.PlacedFootprint = fp;
       src.PlacedFootprint.Offset += upload_offset;
       list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+  }
+  // Small textures here (queueing costs more), the rest on the untiling
+  // threads: the copies only read the memory when the list runs.
+  if (texture_threads_ && total >= kParallelFillMinBytes) {
+    for (const TextureFill& fill : texture_fills_) {
+      QueueTextureFill(fill);
+    }
+  } else {
+    for (const TextureFill& fill : texture_fills_) {
+      if (!GuardedFillTexture(guest_memory_, fill)) {
+        ++stats_.texture_faults;
+      }
     }
   }
   ++stats_.textures_loaded;
@@ -1146,7 +1377,13 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
   std::memcpy(masked, words, sizeof(masked));
   masked[0] &= ~(uint32_t(0x1FF) << 10);  // clamp modes
   masked[3] = 0;                          // swizzle, filters
-  masked[4] = 0;                          // mip filters, LOD bias
+  // Of dword 4 only mip_max_level (bits 6-9): the levels to load. Zeroing it
+  // all (until 2026-10-02) loaded only the largest level of every texture:
+  // no mipmaps at all (distant surfaces shimmered, the Mipmaps setting did
+  // nothing). mip_min_level stays out: the sampler's MinLOD applies it, and
+  // with it set the SDK drops the base address.
+  static const bool base_level_only = std::getenv("NATIVE_TEXTURE_BASE_ONLY") != nullptr;
+  masked[4] = base_level_only ? 0 : masked[4] & (0xFu << 6);
   const uint64_t key = HashBytes(masked, sizeof(masked));
   auto it = guest_textures_.find(key);
   if (it != guest_textures_.end()) {
@@ -1175,6 +1412,10 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
       return texture;
     }
     release_after_flush_.push_back(texture->resource);
+    if (texture->block.heap != UINT32_MAX) {
+      const TextureBlock block = texture->block;
+      AfterCompletion([this, block]() { FreeTextureBlock(block); });
+    }
     guest_textures_.erase(it);
     ++stats_.textures_reloaded;
     ++stats_.textures_reloaded_total;
@@ -1307,6 +1548,90 @@ void Renderer::CreatePipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_
   pipeline.compile_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipeline.status.store(SUCCEEDED(created) ? 1 : 2, std::memory_order_release);
+}
+
+void Renderer::StartTextureWorkers() {
+  if (!texture_workers_.empty()) {
+    return;
+  }
+  for (uint32_t i = 0; i < texture_threads_; ++i) {
+    texture_workers_.emplace_back([this]() {
+      for (;;) {
+        TextureFill fill;
+        {
+          std::unique_lock<std::mutex> lock(texture_jobs_mutex_);
+          texture_jobs_cv_.wait(
+              lock, [this]() { return texture_workers_stop_ || !texture_jobs_.empty(); });
+          if (texture_workers_stop_) {
+            return;
+          }
+          fill = texture_jobs_.front();
+          texture_jobs_.pop_front();
+        }
+        if (!GuardedFillTexture(guest_memory_, fill)) {
+          ++texture_faults_;
+        }
+        std::lock_guard<std::mutex> lock(texture_jobs_mutex_);
+        if (--texture_jobs_pending_ == 0) {
+          texture_done_cv_.notify_all();
+        }
+      }
+    });
+  }
+}
+
+void Renderer::QueueTextureFill(const TextureFill& fill) {
+  StartTextureWorkers();
+  // Large subresources in bands of rows (a 2048x2048 texture is one).
+  const uint32_t row_bytes = std::max<uint32_t>(fill.blocks_x * fill.bytes_per_block, 1);
+  const uint32_t band = fill.depth > 1 ? fill.y_end
+                                       : std::max<uint32_t>(kFillBandBytes / row_bytes, 4);
+  uint32_t queued = 0;
+  {
+    std::lock_guard<std::mutex> lock(texture_jobs_mutex_);
+    for (uint32_t y = fill.y_begin; y < fill.y_end; y += band) {
+      TextureFill part = fill;
+      part.y_begin = y;
+      part.y_end = std::min(fill.y_end, y + band);
+      texture_jobs_.push_back(part);
+      ++texture_jobs_pending_;
+      ++queued;
+    }
+  }
+  stats_.texture_fills_queued += queued;
+  if (queued == 1) {
+    texture_jobs_cv_.notify_one();
+  } else if (queued) {
+    texture_jobs_cv_.notify_all();
+  }
+}
+
+void Renderer::WaitTextureFills() {
+  std::unique_lock<std::mutex> lock(texture_jobs_mutex_);
+  if (!texture_jobs_pending_) {
+    return;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  // Helps with what is still queued, then waits for the running ones.
+  while (texture_jobs_pending_) {
+    if (!texture_jobs_.empty()) {
+      const TextureFill fill = texture_jobs_.front();
+      texture_jobs_.pop_front();
+      lock.unlock();
+      if (!GuardedFillTexture(guest_memory_, fill)) {
+        ++texture_faults_;
+      }
+      lock.lock();
+      --texture_jobs_pending_;
+    } else {
+      texture_done_cv_.wait(
+          lock, [this]() { return !texture_jobs_pending_ || !texture_jobs_.empty(); });
+    }
+  }
+  lock.unlock();
+  stats_.texture_faults += texture_faults_.exchange(0);
+  stats_.texture_wait_ms +=
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
 void Renderer::StartPipelineWorkers() {

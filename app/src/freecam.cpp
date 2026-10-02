@@ -49,14 +49,15 @@
 #include <rex/ppc/func.h>
 
 REXCVAR_DEFINE_BOOL(freecam, false, "NFSMW",
-                    "Free camera (the game's debug world camera) for the player's view");
+                    "Free camera (the game's debug world camera) for the player's view; F6 or "
+                    "L3 + R3 (both stick clicks) switch it");
 REXCVAR_DEFINE_DOUBLE(fov_scale, 1.0, "NFSMW",
                       "Field of view of the driving camera, times the game's (it still widens "
                       "with speed)")
     .range(0.5, 1.6);
 REXCVAR_DEFINE_DOUBLE(freecam_fov, 71.5, "NFSMW",
                       "Field of view of the free camera in degrees (the game's: 71.5); LB/RB "
-                      "(keys 1/3) change it, the right stick click (K) resets it")
+                      "(keys 1/3) change it, a right stick click (K) resets it")
     .range(10.0, 150.0);
 REXCVAR_DEFINE_BOOL(freecam_photo_mode, false, "NFSMW",
                     "Photo mode: with the free camera on, the world stands still");
@@ -230,6 +231,7 @@ constexpr uint32_t kMoverPitchRate = 162;  // int16, * 20000
 constexpr uint32_t kTurbo = 0x82A2BFBC, kSuperTurbo = 0x82A2BFC0;
 constexpr uint32_t kCameraPosition = 0x82906A20, kCameraTarget = 0x82A2DA90;
 constexpr uint16_t kButtonA = 0x1000, kButtonB = 0x2000;
+constexpr uint16_t kButtonLeftThumb = 0x0040;
 constexpr uint16_t kButtonRightThumb = 0x0080, kButtonLeftShoulder = 0x0100,
                    kButtonRightShoulder = 0x0200;
 constexpr double kFreecamDefaultFov = 71.5;
@@ -277,9 +279,38 @@ extern "C" __declspec(dllexport) void NfsmwInputFilter(uint32_t user_index, int1
   // The settings menu (Back + Start) first: while it is open, or the buttons
   // that opened or closed it are held, the game and the free camera get a
   // neutral state.
-  if (NfsmwMenuPadFilter(uint16_t(values[0]), uint8_t(values[1]), uint8_t(values[2]), values[3],
-                         values[4])) {
+  const bool menu = NfsmwMenuPadFilter(uint16_t(values[0]), uint8_t(values[1]),
+                                       uint8_t(values[2]), values[3], values[4]);
+  if (menu) {
     std::fill(values, values + 7, int16_t(0));
+  }
+  // L3 + R3 (both stick clicks): free camera on / off, like F6. The clicks of
+  // that press reach neither the game nor the camera until both are up; R3
+  // alone still resets the free camera's zoom, now when released (it would
+  // reset it at every chord otherwise).
+  static bool thumbs_before = false, thumbs_hold = false, r3_tap = false;
+  const uint16_t buttons = uint16_t(values[0]);
+  const bool l3 = (buttons & kButtonLeftThumb) != 0, r3 = (buttons & kButtonRightThumb) != 0;
+  if (l3 && r3 && !thumbs_before) {
+    thumbs_hold = true;
+    REXCVAR_SET(freecam, !REXCVAR_GET(freecam));
+  }
+  thumbs_before = l3 && r3;
+  if (l3 || thumbs_hold || menu) {
+    r3_tap = false;
+  } else if (r3) {
+    r3_tap = true;
+  } else if (r3_tap) {
+    r3_tap = false;
+    if (REXCVAR_GET(freecam)) {
+      REXCVAR_SET(freecam_fov, kFreecamDefaultFov);
+    }
+  }
+  if (thumbs_hold) {
+    if (!l3 && !r3) {
+      thumbs_hold = false;
+    }
+    values[0] = int16_t(buttons & ~(kButtonLeftThumb | kButtonRightThumb));
   }
   g_pad_buttons_triggers.store(uint64_t(uint16_t(values[0])) | (uint64_t(uint16_t(values[1])) << 16) |
                                (uint64_t(uint16_t(values[2])) << 32));
@@ -318,11 +349,9 @@ extern "C" REX_FUNC(sub_821751E0) {
   const float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
   last = now;
 
-  // Zoom: LB wider, RB narrower, 30 degrees per second; right stick click
-  // back to the game's 71.5.
-  if (buttons & kButtonRightThumb) {
-    REXCVAR_SET(freecam_fov, kFreecamDefaultFov);
-  } else if (buttons & (kButtonLeftShoulder | kButtonRightShoulder)) {
+  // Zoom: LB wider, RB narrower, 30 degrees per second (a right stick click
+  // goes back to the game's 71.5, see NfsmwInputFilter).
+  if (buttons & (kButtonLeftShoulder | kButtonRightShoulder)) {
     const double step = ((buttons & kButtonLeftShoulder) ? 30.0 : -30.0) * dt;
     REXCVAR_SET(freecam_fov, std::clamp(REXCVAR_GET(freecam_fov) + step, 10.0, 150.0));
   }

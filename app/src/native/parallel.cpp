@@ -62,6 +62,9 @@ REXCVAR_DEFINE_INT32(native_renderer_scale, 1, "Debug",
 REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
                      "With native_renderer: background threads that create pipelines (0 = "
                      "when first needed, the renderer waits)");
+REXCVAR_DEFINE_INT32(native_renderer_texture_threads, 6, "Debug",
+                     "With native_renderer: threads that untile texture data when an area's "
+                     "textures load (0 = on the renderer thread)");
 REXCVAR_DEFINE_BOOL(native_renderer_copy_draw_data, true, "Debug",
                     "With native_renderer: draw UP and non-indexed draws from their vertex data "
                     "as it was when the game drew them (false: only count where it differs)");
@@ -947,6 +950,8 @@ void Parallel::Thread() {
   renderer.SetMsaaOverride(std::clamp(REXCVAR_GET(native_renderer_msaa), -1, 3));
   renderer.SetAsyncPipelineThreads(
       uint32_t(std::clamp(REXCVAR_GET(native_renderer_pipeline_threads), 0, 8)));
+  renderer.SetTextureThreads(
+      uint32_t(std::clamp(REXCVAR_GET(native_renderer_texture_threads), 0, 16)));
   auto* kernel = rex::system::kernel_state();
   const uint8_t* physical = kernel->memory()->physical_membase();
   if (!renderer.Initialize()) {
@@ -999,10 +1004,12 @@ void Parallel::Thread() {
       if (frame_ms > 30.0) {
         const replay::RendererStats& fs = renderer.stats();
         REXLOG_INFO("[native renderer] slow frame: {:.1f} ms | textures {:.1f} ms ({} loaded, {} "
-                    "again) | shader translation {:.1f} ms | sync {:.1f} ms | GPU wait {:.1f} ms "
+                    "again; creating {:.1f} ms, waiting for the untiling threads {:.1f} ms, {} "
+                    "parts on them) | shader translation {:.1f} ms | GPU wait {:.1f} ms "
                     "| {} draws, {} waited for their pipeline",
                     frame_ms, fs.texture_ms, fs.textures_loaded, fs.textures_reloaded,
-                    fs.translate_ms - translate_before, fs.sync_ms, fs.flush_ms, fs.draws,
+                    fs.texture_create_ms, fs.texture_wait_ms, fs.texture_fills_queued,
+                    fs.translate_ms - translate_before, fs.flush_ms, fs.draws,
                     fs.draws_waiting_for_pipelines);
       }
       ++rendered_since_log;

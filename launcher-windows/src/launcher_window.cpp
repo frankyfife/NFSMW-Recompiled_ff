@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <thread>
@@ -226,8 +227,9 @@ LauncherWindow::LauncherWindow(QWidget* parent) : QMainWindow(parent) {
   }
   v->addWidget(hero_);
 
-  // Two pages: the everyday settings and the advanced ones (latency, texture
-  // cache, diagnostics), switched with the same pill control as the options.
+  // Two pages: the everyday settings and the advanced ones (latency and
+  // frame pacing, diagnostics), switched with the same pill control as the
+  // options.
   auto* tabBar = new QWidget;
   auto* tb = new QHBoxLayout(tabBar);
   tb->setContentsMargins(20, 14, 20, 0);
@@ -461,9 +463,14 @@ QWidget* LauncherWindow::buildContent() {
   frame->addWide(vsync_);
   vsyncNote_ = note();
   frame->grid()->addWidget(vsyncNote_, frame->grid()->rowCount(), 0, 1, 2);
+  vrr_ = new ToggleSwitch(QStringLiteral("G-Sync / FreeSync (variable refresh)"));
+  frame->addWide(vrr_);
+  vrrNote_ = note();
+  frame->grid()->addWidget(vrrNote_, frame->grid()->rowCount(), 0, 1, 2);
   connect(fps_, &Segmented::currentIndexChanged, this, onChange);
   connect(customFps_, &QSpinBox::valueChanged, this, onChange);
   connect(vsync_, &ToggleSwitch::toggled, this, onChange);
+  connect(vrr_, &ToggleSwitch::toggled, this, onChange);
   right->addWidget(frame);
 
   // ---- Image quality ----
@@ -530,12 +537,14 @@ QWidget* LauncherWindow::buildAdvanced() {
   addNote(latency, QStringLiteral(
                        "The game waits for its turn when it hands over a frame, as on the "
                        "console, so it cannot queue frames ahead. Measured 50 → 19 ms from "
-                       "frame to screen at 60 fps."));
+                       "frame to screen at 60 fps. Needs a frame rate target (or G-Sync / "
+                       "FreeSync): at Unlimited nothing is paced."));
   lowLatency_ = new ToggleSwitch(QStringLiteral("Low-latency mode (like NVIDIA Reflex)"));
   latency->addWide(lowLatency_);
   addNote(latency, QStringLiteral(
                        "The game starts the next frame, and reads the controller, only once "
-                       "the previous one is drawn and on its way to the screen."));
+                       "the previous one is drawn and on its way to the screen. Works at "
+                       "every frame rate."));
   adaptivePacing_ = new ToggleSwitch(QStringLiteral("Adaptive pacing"));
   latency->addWide(adaptivePacing_);
   addNote(latency, QStringLiteral(
@@ -560,7 +569,8 @@ QWidget* LauncherWindow::buildAdvanced() {
   latency->addRow(QStringLiteral("Lock to display"), displayLock_);
   addNote(latency, QStringLiteral(
                        "Aligns the frame clock with the monitor's real refresh. Needed with "
-                       "V-Sync; with G-Sync/FreeSync it causes jitter."));
+                       "V-Sync on a fixed refresh display; never used with G-Sync / FreeSync "
+                       "on (it would round 116 fps back up to 120)."));
   presentPerFrame_ = new ToggleSwitch(QStringLiteral("One present per game frame"));
   latency->addWide(presentPerFrame_);
   addNote(latency, QStringLiteral(
@@ -580,8 +590,9 @@ QWidget* LauncherWindow::buildAdvanced() {
   logStats_ = new ToggleSwitch(QStringLiteral("Performance statistics in the log"));
   diagnostics->addWide(logStats_);
   addNote(diagnostics, QStringLiteral(
-                           "Every 10 s: fps, frame times, latency, the native renderer's "
-                           "statistics and a line for every late frame. Costs next to nothing."));
+                           "Every 10 s: fps, frame times, latency and pacing, and a line for "
+                           "every late frame (the native renderer logs its own statistics "
+                           "either way). Costs next to nothing."));
   auto* reset = new QPushButton(QStringLiteral("Reset advanced settings"));
   diagnostics->addWide(reset);
   connect(logStats_, &ToggleSwitch::toggled, this, onChange);
@@ -671,6 +682,9 @@ void LauncherWindow::loadSettings() {
   // tear), with it every frame was shown 8.2-8.5 ms after the previous, none
   // twice, and the latency was the same (11.8 ms frame start -> present).
   vsync_->setChecked(s.value("frame/vsync3", true).toBool());
+  // Off by default: on a display without variable refresh the cap just under
+  // the refresh rate would repeat a frame every so often.
+  vrr_->setChecked(s.value("frame/vrr", false).toBool());
 
   const qsizetype an = kAnisoValues.indexOf(s.value("image/anisotropic", 4).toInt());
   aniso_->setCurrentIndex(an >= 0 ? int(an) : 3);
@@ -710,6 +724,7 @@ void LauncherWindow::saveSettings() const {
   s.setValue("frame/mode", kFpsModes[std::clamp(fps_->currentIndex(), 0, 3)]);
   s.setValue("frame/fps", customFps_->value());
   s.setValue("frame/vsync3", vsync_->isChecked());
+  s.setValue("frame/vrr", vrr_->isChecked());
   s.setValue("image/anisotropic", kAnisoValues[aniso_->currentIndex()]);
   s.setValue("image/filter", kFilterValues[filter_->currentIndex()]);
   s.setValue("image/sharpness", sharpness_->value());
@@ -812,6 +827,9 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   // waits for the display: on by default (see loadSettings for the
   // measurement; with G-Sync/FreeSync it only acts at the top of the range).
   a << flag("vsync", vsync_->isChecked());
+  // G-Sync / FreeSync: the game keeps the rate under the refresh rate (also
+  // at Unlimited) and presents with V-Sync, without the display lock.
+  a << flag("frame_pacing_vrr", vrr_->isChecked());
   a << opt("guest_vblank_rate", "1000");
   a << opt("frame_pacing_fps", QString::number(targetFps()));
   a << opt("max_fps", "0");
@@ -842,7 +860,7 @@ QStringList LauncherWindow::buildArguments(const QString& gameDir) const {
   }
   a << QStringLiteral("--black_edition=%1").arg(blackEdition_->isChecked() ? "true" : "false");
   a << QStringLiteral("--unlock_all=%1").arg(unlockAll_->isChecked() ? "true" : "false");
-  // Every 10 s: frames the game really presents, latency, texture cache.
+  // Every 10 s: frames the game really presents, latency, pacing.
   a << flag("log_guest_fps", logStats_->isChecked());
   a << flag("log_frame_breakdown", false);
   // F10 in the game records frame times into this folder (one CSV each).
@@ -886,23 +904,86 @@ void LauncherWindow::refresh() {
 
   customFps_->setEnabled(fps_->currentIndex() == 3);
   const int fps = targetFps();
-  if (fps == 0) {
-    setNote(fpsNote_, QStringLiteral("As fast as the PC allows. Physics run on real time, so "
-                                     "game speed is unaffected."),
+  const bool vrr = vrr_->isChecked();
+  // The cap the game computes from its display's mode, refresh - refresh^2 /
+  // 3600 (frame_pacer.h): here from the monitor picked (or the primary).
+  const QList<QScreen*> screens = QGuiApplication::screens();
+  const int monitor = monitor_->currentIndex() - 1;
+  const QScreen* screen = monitor >= 0 && monitor < screens.size()
+                              ? screens[monitor]
+                              : QGuiApplication::primaryScreen();
+  // As the game reads it: the display mode's whole Hz (Qt's value can be
+  // 119.88 where the mode says 119).
+  int hz = screen ? qRound(screen->refreshRate()) : 0;
+  if (screen) {
+    const QPoint inside = screen->geometry().topLeft() + QPoint(1, 1);
+    MONITORINFOEXW info = {};
+    info.cbSize = sizeof(info);
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof(mode);
+    if (GetMonitorInfoW(MonitorFromPoint({inside.x(), inside.y()}, MONITOR_DEFAULTTONEAREST),
+                        &info) &&
+        EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
+        mode.dmDisplayFrequency > 1) {
+      hz = int(mode.dmDisplayFrequency);
+    }
+  }
+  const int cap = hz > 1 ? int(std::floor(hz - hz * hz / 3600.0)) : 0;
+  if (fps == 0 && vrr) {
+    setNote(fpsNote_, cap ? QStringLiteral("As fast as the display shows: %1 fps at %2 Hz "
+                                           "(G-Sync / FreeSync).")
+                                .arg(cap)
+                                .arg(hz)
+                          : QStringLiteral("As fast as the display shows (G-Sync / FreeSync)."));
+  } else if (fps == 0) {
+    setNote(fpsNote_, QStringLiteral("As fast as the PC allows: above the refresh rate it tears "
+                                     "without V-Sync, even with G-Sync. Physics run on real "
+                                     "time, so game speed is unaffected."),
             "warn");
+  } else if (vrr && cap && fps > cap) {
+    setNote(fpsNote_, QStringLiteral("Paced at %1 fps: G-Sync / FreeSync keeps it under the "
+                                     "display's %2 Hz.")
+                          .arg(cap)
+                          .arg(hz));
   } else {
     setNote(fpsNote_, QStringLiteral("Evenly paced at %1 fps. Physics run on real time, so game "
                                      "speed is the same at any frame rate.")
                           .arg(fps));
   }
 
-  if (vsync_->isChecked()) {
+  vsync_->setEnabled(!vrr);
+  if (vrr) {
+    setNote(vsyncNote_, QStringLiteral("On with G-Sync / FreeSync: it only holds back a frame "
+                                       "that comes a hair before the display is ready."));
+  } else if (vsync_->isChecked()) {
     setNote(vsyncNote_, QStringLiteral("Every frame waits for the monitor's refresh: no tearing. "
                                        "Measured: no extra latency."));
   } else {
     setNote(vsyncNote_, QStringLiteral("Frames faster than the monitor's refresh tear (at 120 fps "
                                        "on 120 Hz: about a quarter of them)."),
             "warn");
+  }
+  if (vrr) {
+    setNote(vrrNote_, QStringLiteral("The frame rate stays just under the refresh rate%1, with "
+                                     "V-Sync: no tearing and no V-Sync lag. Only for displays "
+                                     "with G-Sync or FreeSync (on others a frame repeats now "
+                                     "and then).")
+                          .arg(cap ? QStringLiteral(" (%1 fps at %2 Hz)").arg(cap).arg(hz)
+                                   : QString()),
+            "hot");
+  } else {
+    setNote(vrrNote_, QStringLiteral("For displays with variable refresh: keeps the frame rate "
+                                     "inside the range G-Sync / FreeSync can follow (116 fps at "
+                                     "120 Hz), so Unlimited or a high target does not tear."));
+  }
+
+  // Advanced options that do nothing in this combination (see buildAdvanced).
+  const bool paced = fps > 0 || vrr;
+  if (pacingAtGuest_) {
+    pacingAtGuest_->setEnabled(paced);
+    adaptivePacing_->setEnabled(paced && pacingAtGuest_->isChecked());
+    smoothMs_->setEnabled(paced && pacingAtGuest_->isChecked());
+    displayLock_->setEnabled(paced && !vrr);
   }
 
   const bool sharpen = filter_->currentIndex() != 0;

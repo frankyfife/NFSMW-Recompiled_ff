@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/thread.h>
 
@@ -48,6 +49,77 @@ struct FramePacerTiming {
 // propio de 60,000 fps habia un tiron cada 8,3 s. Sin vsync y con
 // G-Sync/FreeSync NO: el "vblank" del compositor es nuestro propio present y
 // recolocar la fase sobre el desplazaba el reloj hasta medio refresco.
+// The display's refresh rate in Hz as its mode sets it (G-Sync / FreeSync
+// do not change that; DWM's composition timing follows our own presents
+// with variable refresh, so it cannot be used to stay under the refresh).
+// The monitor of this process's foreground window, else the primary one;
+// looked up again every 2 s (a window moved to another monitor). 0 unknown.
+inline double NominalRefreshHz() {
+#if defined(_WIN32)
+  static double hz = 0.0;
+  static uint64_t next_query = 0;
+  const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();
+  const uint64_t now = rex::chrono::Clock::QueryHostTickCount();
+  if (now >= next_query) {
+    next_query = now + freq * 2;
+    HMONITOR monitor = nullptr;
+    const HWND foreground = GetForegroundWindow();
+    DWORD process = 0;
+    if (foreground && GetWindowThreadProcessId(foreground, &process) &&
+        process == GetCurrentProcessId()) {
+      monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+    }
+    if (monitor || hz == 0.0) {
+      MONITORINFOEXW info = {};
+      info.cbSize = sizeof(info);
+      const wchar_t* device =
+          monitor && GetMonitorInfoW(monitor, &info) ? info.szDevice : nullptr;
+      DEVMODEW mode = {};
+      mode.dmSize = sizeof(mode);
+      if (EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, &mode) &&
+          mode.dmDisplayFrequency > 1) {
+        if (double(mode.dmDisplayFrequency) != hz) {
+          REXLOG_INFO("[pacing] display mode refresh {} Hz", mode.dmDisplayFrequency);
+        }
+        hz = double(mode.dmDisplayFrequency);
+      }
+    }
+  }
+  return hz;
+#else
+  return 0.0;
+#endif
+}
+
+// G-Sync / FreeSync (frame_pacing_vrr): the highest frame rate that stays
+// inside the variable refresh range with some margin, refresh - refresh^2 /
+// 3600 (116 at 120 Hz, 138 at 144, 59 at 60). Above the refresh rate the
+// display cannot follow: frames tear (V-Sync off) or wait in the swap chain
+// for a refresh (V-Sync on, a refresh more latency). 0 unknown.
+inline double VrrCapFps() {
+  const double hz = NominalRefreshHz();
+  return hz > 0.0 ? std::floor(hz - hz * hz / 3600.0) : 0.0;
+}
+
+// The rate to pace at: the target, under the VRR cap with frame_pacing_vrr
+// (also with no target: "unlimited" then means as fast as the display shows).
+inline double PacingFps(int32_t target_fps, bool vrr) {
+  double fps = target_fps > 0 ? double(target_fps) : 0.0;
+  if (vrr) {
+    const double cap = VrrCapFps();
+    if (cap > 0.0 && (fps <= 0.0 || fps > cap)) {
+      fps = cap;
+    }
+  }
+  return fps;
+}
+
+// frame_pacing_vrr is the GPU plugin's (another DLL): asked by name.
+inline bool VrrMode() {
+  static const bool exists = rex::cvar::GetFlagInfo("frame_pacing_vrr") != nullptr;
+  return exists && rex::cvar::Query<bool>("frame_pacing_vrr");
+}
+
 // fps is a double so the adaptive pacing (VdSwap) can ask for, say, 83.4.
 inline FramePacerTiming PaceFrame(double fps, bool display_lock, int32_t phase_percent) {
   FramePacerTiming t;

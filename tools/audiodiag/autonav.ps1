@@ -4,7 +4,8 @@
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
 # -Record <mkv>: the screen is recorded (ffmpeg ddagrab, NVENC) from the
 # first key on. Held together: <keys joined by +>*<seconds>, e.g. G+d*2
-# (gas and steer right); d / a = D / A key held (steer right / left).
+# (gas and steer right); d / a = D / A key held (steer right / left); f / k =
+# F / K held (L3 / R3 with mnk_mode, f+k*1 is the free camera chord).
 # s = S key held (count = seconds), F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
 # G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
@@ -83,14 +84,14 @@ if ($Record) {
   $rec = [System.Diagnostics.Process]::Start($psi)
 }
 $holdKeys = @{ 'BACK' = 0x53; 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27;
-               'Q' = 0x31; 'Z' = 0x33; 'd' = 0x44; 'a' = 0x41 }
+               'Q' = 0x31; 'Z' = 0x33; 'd' = 0x44; 'a' = 0x41; 'f' = 0x46; 'k' = 0x4B }
 foreach ($step in $Keys.Split(',')) {
   $mm = [regex]::Match($step.Trim(), '^([A-Za-z](?:\+[A-Za-z])+)\*(\d+)$')
   if ($mm.Success) {
     # Several keys held together for n seconds.
     $vks = @()
     foreach ($ch in $mm.Groups[1].Value.Split('+')) {
-      $key = if ($ch -ceq 'd' -or $ch -ceq 'a') { $ch } else { $ch.ToUpper() }
+      $key = if ('d', 'a', 'f', 'k' -ccontains $ch) { $ch } else { $ch.ToUpper() }
       foreach ($kk in $holdKeys.Keys) { if ($kk -ceq $key) { $vks += $holdKeys[$kk] } }
     }
     [G4]::SetForegroundWindow($h) | Out-Null

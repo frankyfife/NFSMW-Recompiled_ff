@@ -55,6 +55,15 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
   1280 × 720 (on top of the game's own 4× MSAA): much smoother edges, sharper textures.
 - **MSAA:** the game's multisampled targets with 1, 2, 4 (the game's) or 8 samples.
 - **Mipmaps:** the game's, one level sharper, or off (full-size textures only), live.
+  Until 2026-10-02 only the full-size level of every texture was loaded (distant roads
+  shimmered and the setting did nothing); now every level, matching the emulation's
+  picture.
+- **Textures load in parallel:** entering an area, ~300 textures took 76 ms in one frame
+  (the picture stalled); now 6 ms: placed in large heaps instead of one allocation each,
+  untiled by worker threads while the renderer goes on.
+- **G-Sync / FreeSync mode:** keeps the frame rate just under the display's refresh rate
+  (116 fps at 120 Hz, also at Unlimited) and presents with V-Sync: no tearing and no V-Sync
+  lag. Off by default (on a fixed-refresh display it would repeat a frame now and then).
 - **Cars at full detail at any distance:** the game drops a car to simpler models once it
   covers less than 120 pixels of its 720p picture (about half of the cars on screen in
   free roam); now every car keeps its full model. On by default, live in the Esc menu.
@@ -79,8 +88,8 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 
 ### Free camera and photo mode
 
-**F6** switches the player's view to the game's own debug world camera, which the
-retail game has but no button reaches. **F8** is a photo mode: the world stands still
+**F6** (or **L3 + R3**, both stick clicks) switches the player's view to the game's own
+debug world camera, which the retail game has but no button reaches. **F8** is a photo mode: the world stands still
 (the simulation stops: traffic, physics, sparks) while the camera keeps flying. Both are also in the
 in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
 
@@ -91,6 +100,7 @@ in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
 | Up / down | E / Q | right / left trigger |
 | Faster | Space, Backspace (even faster) | A, B |
 | Zoom (field of view) | 1 wider, 3 narrower, K resets | LB, RB, right stick click |
+| On / off | F6 | L3 + R3 |
 
 How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
 
@@ -101,7 +111,7 @@ How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
   cutscenes keep theirs.
 - **Settings menu with the controller:** **Back + Start** opens the in-game settings
   menu (and closes it). D-pad or left stick move, A selects, LB / RB switch section,
-  B closes. *System → Quit to desktop* ends the game, so it can be quit without a
+  B closes an open list (or ends editing a value), then the menu. *System → Quit to desktop* ends the game, so it can be quit without a
   keyboard. The game gets no input while the menu is open.
 
 ### It runs, from a Windows machine, start to finish
@@ -156,10 +166,12 @@ the launcher now always starts the native renderer, which has its own answers to
 - Picks an ISO or an extracted folder and extracts the ISO itself.
 - Always starts the **native renderer** (Direct3D 12). Resolution, render scale
   (supersampling, the anti-aliasing), fullscreen, monitor, frame rate target, V-Sync,
-  anisotropic filtering, output filter and sharpness.
+  G-Sync / FreeSync mode, anisotropic filtering, output filter and sharpness.
 - **Advanced** tab: latency and frame pacing (pace in the game thread, low-latency
   mode, adaptive pacing, smoothing, display lock, one present per frame) and
-  diagnostics, each with what it does and what was measured, plus a reset.
+  diagnostics, each with what it does and what was measured, plus a reset. All of them
+  still act with the native renderer; the pacing ones need a frame rate target (or the
+  G-Sync / FreeSync mode) and are greyed out where they do nothing.
 - Black Edition content and *Unlock everything* (the game's own `UnlockAllThings`
   debug flag; experimental — what it unlocks is up to the game).
 

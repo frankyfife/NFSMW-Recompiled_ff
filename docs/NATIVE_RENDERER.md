@@ -564,6 +564,24 @@ default (new settings key, so it comes on once for everyone). Without it
 every present that comes before the refresh ends tears; at a target equal
 to the refresh rate that is a quarter of them.
 
+**G-Sync / FreeSync mode (`frame_pacing_vrr`, 2026-10-02):** at Unlimited
+with V-Sync off the game ran at 195-530 fps on the 120 Hz VRR display and
+tore: variable refresh only follows up to the refresh rate. With V-Sync on,
+Unlimited did not tear but queued a refresh of latency (20.4 ms frame start
+to output instead of 12.0). The usual G-Sync setup, V-Sync on and a cap a
+little under the refresh rate, did not work either: "Lock to display"
+rounds the pacing period to whole refreshes, so 116 fps ran at 120. The
+new switch (launcher, Frame rate card; Esc menu; off by default, since on a
+fixed-refresh display a cap under the refresh repeats a frame now and then)
+does all of it: the pacer runs at min(target, refresh - refresh^2 / 3600)
+(116 at 120 Hz, 138 at 144; also at Unlimited), never locked to the display,
+and the presenter uses V-Sync. The refresh rate is the display mode's
+(EnumDisplaySettings for the game window's monitor, looked up every 2 s),
+not DWM's composition timing, which follows our own presents with variable
+refresh. Measured at Unlimited with V-Sync off and the switch on: paced at
+116.0 fps, 116 presents/s, all with V-Sync (`[pacing] ... G-Sync / FreeSync
+cap` in the log).
+
 **Half-loaded textures (white flashes):** the renderer checks the memory
 of each guest texture once per frame (sampled hash) and loaded it again when
 it changed. It draws a frame or two after the game recorded it, so a change
@@ -577,6 +595,47 @@ memory in 10 s"); in free roam a few per 10 s, all taken a frame later.
 sampler by one level, 2 clamps the maximum LOD to the minimum (only the
 largest level). Samplers are cached by their description, so it applies
 live.
+
+**Only the largest level was loaded (fixed 2026-10-02):** the texture key
+zeroed dword 4 of the fetch constant (filters, LOD bias), and the zeroed
+words were also what the texture was loaded from; dword 4 holds
+`mip_max_level` too, so every texture had one level. Distant surfaces
+shimmered (a crop of the distant road: 1.6 times the pixel-to-pixel
+contrast of the emulation's picture) and the Mipmaps setting did nothing. Now bits 6-9 stay
+(`mip_min_level` stays out: the sampler's MinLOD applies it, and with it set
+the SDK drops the base address). Compared with the GPU emulation at the same
+spot and 4x anisotropic filtering, a crop of the distant road: mean
+difference 0.27 of 255 (4.09 before). `NATIVE_TEXTURE_BASE_ONLY=1` loads
+only the largest level again, for comparing. 8 and 16 bit textures whose
+endian swap unit is larger than a texel (8in16 on 1 byte, 8in32 or 16in32
+on 2) were never copied at all and stayed zero; the swap partner is now
+read from the neighbouring texel, as the hardware swaps memory, not texels.
+
+**Textures loaded in parallel (2026-10-02):** entering an area, one
+renderer frame loaded about 300 textures in 76 ms (108 ms for the frame;
+the game's swap waits 50 ms at most, so it ran ahead and the picture
+stalled). Measured split: creating the resources was 60 of the 65 ms
+(`CreateCommittedResource`, about 0.2 ms each with the mips), untiling
+most of the rest, done per block with a call across the DLL boundary
+(`GetTiledOffset2D`) and byte-wise swaps into write-combined upload memory.
+Now:
+
+- Guest textures are placed resources in 64 MB heaps (first fit over the
+  free ranges, 4 KB alignment where allowed; a block goes back to its heap
+  once the GPU is done with a reloaded texture).
+- The copies are recorded at once, the data is untiled into the upload
+  memory by `native_renderer_texture_threads` threads (default 6, bands of
+  128 KB; textures under 32 KB on the renderer thread). `Submit` waits for
+  them (and helps) before the list runs, so the GPU never reads a block that
+  is not filled yet and upload memory is not reused under a pending write.
+  A worker reads guest memory under SEH (the game may free it meanwhile).
+- The tiling formula is inlined, swaps go 8 bytes at a time, and the upload
+  range is no longer cleared first (every block is written).
+
+Same area, same frame: textures 76.3 ms -> 5.9 ms (2.0 ms of it creating),
+the frame 108 ms -> 37 ms, now with all mip levels. The slow-frame log line
+shows the split (`creating`, `waiting for the untiling threads`, parts on
+the threads). Recording of a drive through it: no one-frame glitches.
 
 **Game thread spent 30 % in `strchr` (fixed):** the hook of the library's
 shader-load writer (`sub_825A3AF0`, thousands of calls per frame) asked

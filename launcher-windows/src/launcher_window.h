@@ -84,6 +84,8 @@ class LauncherWindow final : public QMainWindow {
   QLabel* fpsNote_ = nullptr;
   ToggleSwitch* vsync_ = nullptr;
   QLabel* vsyncNote_ = nullptr;
+  ToggleSwitch* vrr_ = nullptr;
+  QLabel* vrrNote_ = nullptr;
 
   Segmented* aniso_ = nullptr;
   Segmented* filter_ = nullptr;
