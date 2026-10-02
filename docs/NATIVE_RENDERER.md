@@ -642,8 +642,11 @@ its own fix:
    diagnostics, warm pipeline cache: no glitch left (the largest flagged
    frames are sparks, 1000-1600 pixels), 0 frames held for pipelines, 57
    held for a stride mismatch in 60 s of driving in circles with sparks and
-   skid marks (0 in the minute before it). Next step if those should be
-   drawn instead: find where the library loads the patched shader for them.
+   skid marks (0 in the minute before it). A 200 s drive (circles both
+   ways, straights): no glitch either (largest flagged frames: sparks), 200
+   frames held for a stride mismatch, 2 for pipelines. Next step if those
+   should be drawn instead: find where the library loads the patched shader
+   for them.
 
    Not a glitch: when the game pauses, the HUD goes a frame before the
    picture darkens, and that frame can show an orange glow around a light
