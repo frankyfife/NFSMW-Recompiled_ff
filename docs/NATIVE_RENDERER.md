@@ -778,6 +778,82 @@ the track streamer's loaded sections and the precomputed visible sections
 (`TrackStreamer`, `VisibleSectionManager`), data of the track, not a
 distance in the code.
 
+## What the GPU emulation still does (read from the code, 2026-10-02)
+
+Read from the patched SDK (v0.10.0 with all `tools/parche_*.py`) and
+`app/src/native/`, **not measured**. While the native renderer delivers frames,
+the SDK's command processor (thread "GPU Commands") still reads the whole
+command stream the D3D library writes, including the main scene three times
+for the tiles (5268 draw packets in the stage 1 frame). It only skips the
+draws and resolves (`ExecutePacketType3Draw`) and the counting of ZPD samples.
+
+| Element | What runs now | Needed by the game | Native or removable |
+|---|---|---|---|
+| PM4 parsing (ring, indirect buffers, tile replays) | everything | yes: fences, swaps and interrupts are in the stream | stays; can get thinner (rows below) |
+| Register writes (type 0, `SET_CONSTANT`, `LOAD_ALU_CONSTANT`) | every value into the register file; fetch constants also mark the texture cache's bindings and the vertex buffer residency dirty | only the scratch registers, `COHER_STATUS_HOST` and the gamma ramp (`DC_LUT_*`) | the constants' bookkeeping can be skipped |
+| Shader loads (`IM_LOAD`, `IM_LOAD_IMMEDIATE`) | `PipelineCache::LoadShader`: XXH3 of the microcode, a map lookup, a `D3D12Shader` per new program | no, only the emulated draws used them | can be skipped |
+| Draw packets | parsed; per packet `NfsmwNativeSkipEmulation()`, which locks `shared_mutex_` in `Renderer::GetSharedFrame` (also per ZPD event) | no | an atomic flag set at the first shared frame instead of the lock (uncapped about 1.5 million locks per second) |
+| Fences (`EVENT_WRITE_SHD`, `MEM_WRITE`, scratch register writeback) and the ring's read pointer | written as soon as the emulator *parses* the packet | yes | the one that matters, see below |
+| `WAIT_REG_MEM` | polls memory or a register | yes | stays |
+| `INTERRUPT` | the guest's interrupt callback | yes | stays |
+| `EVENT_WRITE_ZPD` | only `VGT_EVENT_INITIATOR`; the native renderer writes the reports | yes | native (done) |
+| `EVENT_WRITE_EXT` | fixed full-screen extents | probably not | stays (cheap) |
+| `XE_SWAP` → `IssueSwap` | `RequestSwapTexture` for the emulated front buffer (texture cache lookup, loaded from guest memory if it changed) **before** the native frame is asked for; then up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output | the swap yes, the emulated front buffer no | call `RequestSwapTexture` only when there is no native frame. A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
+| Small resolves (≤ 64 KB, exposure) | written into guest memory by the native renderer once its GPU finished the frame | yes | native (done) |
+| Shared memory, texture cache, EDRAM / render target cache, primitive processor | idle: no draw requests anything. Textures and watched pages from before the native renderer took over stay until evicted or written | no | could be released after the takeover (video memory), low priority |
+
+**Fences, the one that matters.** The D3D library learns from fences and from
+the ring's read pointer when the GPU is done with memory: command ring space
+(BeginVertices data), vertex buffers in rotation, locked buffers, texture
+memory it frees for streaming. The emulator writes them when it parses the
+packet; the native renderer gets the frame only at the swap and draws it
+afterwards on its own thread. That is the open point "the renderer reads
+memory later than the draw happened". It is covered by workarounds, each
+measured: draw data copied at the draw (`native_renderer_copy_draw_data`),
+the game at most one frame ahead (`native_renderer_bound_lead`, 50 ms at
+most), texture changes only taken when seen twice. The native version: the
+command processor hands fence writes and the read pointer to the native
+renderer, which writes them once its GPU has finished the draws before them,
+as the Xenos does; the workarounds could then go. Risk: if the game waits in
+the middle of a frame for a fence of that same frame (blocking on a fence, a
+full ring), the renderer only gets that frame at the swap and nothing moves;
+it needs a fallback that writes the fence after a time-out, as now. Before
+building it, measure: fence writes per frame (address, value), who waits for
+them (`WAIT_REG_MEM` on memory, the library polling on the CPU; its fence
+wait still has to be found), and how far ahead of the renderer the game is
+when it waits.
+
+**The game thread** still runs the D3D library's whole command building: the
+flush of the dirty register groups before every draw, the shader loads, the
+draw packets, the tile replays. In the profile from before the native
+renderer that was about 21 % of the main thread's active time; uncapped, the
+game thread now sets the frame rate (282-301 fps). Leaving it out is option
+A below on top of the native renderer: the most to gain without a frame
+limit and on CPUs with few cores, and the most risk (fences, ring and swaps
+must stay consistent). Only after the fences are native, and with
+measurements.
+
+**What the native renderer leaves out** (`[native renderer] 10 s:` in the
+log, "skipped" and "unsupported"): draws in EDRAM modes other than color +
+depth and depth only (resolves go their own way), primitives other than
+triangle lists, fans, strips and quad lists (no points, lines, rectangle
+lists), indexed fans and quad lists, draws without rasterization, shaders the
+translator rejects, texture formats without a host format. Memexport writes go
+to a null UAV. Frames held for a stride mismatch: see the white flashes
+above. If those counters stay at 0 in normal play, nothing visible is
+missing.
+
+**Order proposed:**
+
+1. Cheap, without effect on the picture: the atomic flag instead of the
+   lock per draw packet; while the native renderer delivers, no
+   `RequestSwapTexture`, no shader loads and no constant bookkeeping on the
+   GPU thread. Measure the GPU thread with `tools/cpuprof` before and after.
+2. Diagnostics for the fences (which, how many, who waits and how long).
+3. Native fences and read pointer with the time-out fallback; then try
+   `native_renderer_copy_draw_data` and `native_renderer_bound_lead` off.
+4. Only then option A.
+
 ## Options
 
 **A. Direct submission (bypass PM4, keep the Xenos backend).** Medium effort,
