@@ -1,4 +1,5 @@
-﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p', [string]$Record = '')
+﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p', [string]$Record = '', [int]$RecordFps = 60,
+      [string]$UserData = "$env:TEMP\claude\nfsmw_testuser")
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
@@ -44,12 +45,22 @@ public static class G4 {
 if (-not [G4]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [G4]::SetProcessDPIAware() | Out-Null }
 # S = Space (A button), B = Backspace (B button), H/J/K/M = stick left/right/up/down (A/D/W/S keys)
 $vk = @{ 'E' = 0x0D; 'L' = 0x25; 'R' = 0x27; 'U' = 0x26; 'D' = 0x28; 'S' = 0x20; 'X' = 0x1B;
-         'B' = 0x08; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53; 'F' = 0x75; 'C' = 0x77 }
+         'B' = 0x08; 'YBUTTON' = 0x50; 'H' = 0x41; 'J' = 0x44; 'K' = 0x57; 'M' = 0x53; 'F' = 0x75; 'C' = 0x77 }
 $b = "D:\NFSMW\NFSMW-Recompiled_ff\build"
 $dump = "$env:TEMP\claude\audio_$Name.raw"
 if (Test-Path $dump) { Remove-Item -LiteralPath $dump }
 $log = "$env:TEMP\claude\nav_$Name.log"
-$a = @('--game_data_root', "$b\game_root", '--gpu_plugin', 'xenos', "--fullscreen=$(-not $Windowed)".ToLower(),
+# The game's saves (profiles) of the tests live apart from the player's
+# (Documents\nfsmw): a copy of them, made once. Key sequences that create or
+# change a profile then never touch the player's.
+if (-not (Test-Path $UserData)) {
+  New-Item -ItemType Directory -Force $UserData | Out-Null
+  $saves = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'nfsmw'
+  Get-ChildItem $saves -Directory | Where-Object { $_.Name -notmatch '^(cache|_backup)' } |
+    ForEach-Object { Copy-Item $_.FullName -Destination $UserData -Recurse }
+}
+$a = @('--game_data_root', "$b\game_root", "--user_data_root=$UserData", '--gpu_plugin', 'xenos',
+       "--fullscreen=$(-not $Windowed)".ToLower(),
        '--resolution', $Resolution, '--guest_vblank_rate=1000', "--frame_pacing_fps=$Fps",
        '--readback_resolve=fast', '--mnk_mode=true', '--log_guest_fps=true', '--audio_mute=true',
        "--audio_dump_file=$dump", '--log_file', $log) + $Extra
@@ -77,7 +88,7 @@ if ($Record) {
   # Started through .NET: Start-Process with a hidden window did not return here.
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $ff
-  $psi.Arguments = "-y -v error -f lavfi -i ddagrab=output_idx=0:framerate=60:draw_mouse=0 -c:v h264_nvenc -cq 24 `"$Record`""
+  $psi.Arguments = "-y -v error -f lavfi -i ddagrab=output_idx=0:framerate=$($RecordFps):draw_mouse=0 -c:v h264_nvenc -cq 24 `"$Record`""
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $psi.RedirectStandardInput = $true  # q on stdin ends the recording cleanly
@@ -121,6 +132,7 @@ foreach ($step in $Keys.Split(',')) {
   if ($k -eq 'W') { Start-Sleep -Seconds $n; continue }
   # Lower case s: S key held (left stick down: free camera backwards).
   if ($k -ceq 's') { $k = 'BACK' }
+  if ($k -ceq 'y') { $k = 'YBUTTON' }  # the P key: Y with mnk_mode (P is the shot)
   $hold = @{ 'BACK' = 0x53; 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27; 'Q' = 0x31; 'Z' = 0x33 }
   if ($hold.ContainsKey($k)) {
     # Held for n seconds: G = gas (right trigger, O key), V = W key (left

@@ -89,7 +89,7 @@ Details, every stage and every measurement: [docs/NATIVE_RENDERER.md](docs/NATIV
 ### Free camera and photo mode
 
 **F6** (or **L3 + R3**, both stick clicks) switches the player's view to the game's own
-debug world camera, which the retail game has but no button reaches. **F8** is a photo mode: the world stands still
+debug world camera, which the retail game has but no button reaches. **F8** (**Y** on the controller) is a photo mode: the world stands still
 (the simulation stops: traffic, physics, sparks) while the camera keeps flying. Both are also in the
 in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
 
@@ -101,6 +101,7 @@ in-game settings menu (Esc). The HUD is hidden, the car gets no input meanwhile.
 | Faster | Space, Backspace (even faster) | A, B |
 | Zoom (field of view) | 1 wider, 3 narrower, K resets | LB, RB, right stick click |
 | On / off | F6 | L3 + R3 |
+| World pause (photo mode) | F8 | Y |
 
 How it was found in the game's code: [docs/FREECAM.md](docs/FREECAM.md).
 

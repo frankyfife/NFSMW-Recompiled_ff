@@ -732,7 +732,7 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
       }
       if (ExisteCvar("freecam_photo_mode")) {
         bool foto = CvarB("freecam_photo_mode");
-        if (ImGui::Checkbox("Photo mode: world paused (F8)", &foto)) {
+        if (ImGui::Checkbox("Photo mode: world paused (F8 / Y)", &foto)) {
           SetCvarB("freecam_photo_mode", foto);
           if (foto) {
             SetCvarB("freecam", true);
@@ -741,7 +741,8 @@ void NfsmwMenuDialog::OnDraw(ImGuiIO& io) {
         MarcaVivo("(applies instantly)");
         ImGui::TextColored(ImColor(kTextoAtenuado),
                            "Traffic, physics and effects stand still while the free camera "
-                           "moves; F8 again lets the world run on.");
+                           "moves; F8 again (or Y on the controller, with the free camera on) "
+                           "lets the world run on.");
         ImGui::Spacing();
       }
     }

@@ -60,7 +60,8 @@ REXCVAR_DEFINE_DOUBLE(freecam_fov, 71.5, "NFSMW",
                       "(keys 1/3) change it, a right stick click (K) resets it")
     .range(10.0, 150.0);
 REXCVAR_DEFINE_BOOL(freecam_photo_mode, false, "NFSMW",
-                    "Photo mode: with the free camera on, the world stands still");
+                    "Photo mode: with the free camera on, the world stands still; F8 or Y "
+                    "(with the free camera on) switch it");
 
 extern "C" REX_FUNC(__imp__sub_82167640);  // camera director update
 extern "C" REX_FUNC(sub_8216E550);         // key of "CDActionDebug" (static)
@@ -230,7 +231,7 @@ constexpr uint32_t kMoverYawRate = 160;   // int16, * 20000
 constexpr uint32_t kMoverPitchRate = 162;  // int16, * 20000
 constexpr uint32_t kTurbo = 0x82A2BFBC, kSuperTurbo = 0x82A2BFC0;
 constexpr uint32_t kCameraPosition = 0x82906A20, kCameraTarget = 0x82A2DA90;
-constexpr uint16_t kButtonA = 0x1000, kButtonB = 0x2000;
+constexpr uint16_t kButtonA = 0x1000, kButtonB = 0x2000, kButtonY = 0x8000;
 constexpr uint16_t kButtonLeftThumb = 0x0040;
 constexpr uint16_t kButtonRightThumb = 0x0080, kButtonLeftShoulder = 0x0100,
                    kButtonRightShoulder = 0x0200;
@@ -312,6 +313,15 @@ extern "C" __declspec(dllexport) void NfsmwInputFilter(uint32_t user_index, int1
     }
     values[0] = int16_t(buttons & ~(kButtonLeftThumb | kButtonRightThumb));
   }
+  // Y with the free camera on: the world stands still (photo mode, like F8)
+  // or runs on. (The game gets no input while the free camera is on.)
+  static bool y_before = false;
+  const bool y = (buttons & kButtonY) != 0;
+  if (y && !y_before && REXCVAR_GET(freecam)) {
+    REXCVAR_SET(freecam_photo_mode, !REXCVAR_GET(freecam_photo_mode));
+    REXLOG_INFO("[freecam] photo mode {} (Y)", REXCVAR_GET(freecam_photo_mode) ? "on" : "off");
+  }
+  y_before = y;
   g_pad_buttons_triggers.store(uint64_t(uint16_t(values[0])) | (uint64_t(uint16_t(values[1])) << 16) |
                                (uint64_t(uint16_t(values[2])) << 32));
   g_pad_sticks.store(uint64_t(uint16_t(values[3])) | (uint64_t(uint16_t(values[4])) << 16) |
@@ -392,24 +402,47 @@ extern "C" REX_FUNC(sub_821751E0) {
 // debug camera writes 13020 = 71.5 every frame). The movers write it before
 // they hand the camera its new frame (sub_82161000, which also keeps the
 // previous frame's at +420 for the difference); the projection is built from
-// it later, when the view is drawn (sub_8211D510: half the angle, sin/cos).
+// it later, when the views are drawn (sub_8243EC28, after the world update).
 // So the free camera's or the scaled one is written after sub_82161000, and
 // the game's own put back before the next world update, so that a camera
 // reading it back never sees the scaled one (and it never compounds).
 namespace {
 std::atomic<uint32_t> g_fov_written{0};  // 0x10000 | written, 0: none
 std::atomic<uint16_t> g_fov_game{0};
+// The player's camera was handed a new frame during the current world update.
+std::atomic<bool> g_fov_new_frame{false};
 
-void RestoreGameFov(uint8_t* base) {
+// The value it took back (0x10000 | written), 0 if none.
+uint32_t RestoreGameFov(uint8_t* base) {
   const uint32_t written = g_fov_written.exchange(0);
   const uint32_t camera = g_player_camera.load();
   if (!written || !camera) {
+    return 0;
+  }
+  uint16_t now;
+  std::memcpy(&now, base + camera + 196, 2);
+  if (__builtin_bswap16(now) != uint16_t(written)) {
+    return 0;
+  }
+  Store16(base, camera + 196, int16_t(g_fov_game.load()));
+  return written;
+}
+
+// A world update that did not hand the player's camera a new frame (frames
+// without a simulation step: above the game's own rate, at 120 fps every
+// other one) left the game's value in place, and the frame was drawn with
+// it: the free camera's zoom (or the scaled driving view) and the game's
+// field of view in turn, double images while zooming. Put it back then.
+void ReapplyFov(uint8_t* base, uint32_t restored) {
+  const uint32_t camera = g_player_camera.load();
+  if (!restored || !camera || g_fov_new_frame.load()) {
     return;
   }
   uint16_t now;
   std::memcpy(&now, base + camera + 196, 2);
-  if (__builtin_bswap16(now) == uint16_t(written)) {
-    Store16(base, camera + 196, int16_t(g_fov_game.load()));
+  if (__builtin_bswap16(now) == g_fov_game.load()) {
+    Store16(base, camera + 196, int16_t(uint16_t(restored)));
+    g_fov_written.store(restored);
   }
 }
 }  // namespace
@@ -425,22 +458,35 @@ extern "C" REX_FUNC(sub_823A2320) {
 }
 
 extern "C" REX_FUNC(sub_823AFBF8) {
-  RestoreGameFov(base);
-  if (!PhotoMode() || ctx.f1.f64 > 0.0) {
+  const uint32_t restored = RestoreGameFov(base);
+  g_fov_new_frame.store(false);
+  const double step = ctx.f1.f64;
+  const bool photo = PhotoMode();
+  if (!photo || step > 0.0) {
     __imp__sub_823AFBF8(ctx, base);
-    return;
   }
+  // The cameras of a frame without a simulation step, with the real time: in
+  // photo mode (no step runs at all), and with the free camera on, where the
+  // world steps every 1/60 s: above 60 fps the free camera moved only every
+  // other frame (each pose shown twice at 120 fps). Not when the update ran
+  // the cameras itself (the paused game state does, with 0.01 s).
   static auto last = std::chrono::steady_clock::now();
   const auto now = std::chrono::steady_clock::now();
-  const double dt = std::clamp(std::chrono::duration<double>(now - last).count(), 0.001, 0.1);
+  const bool own_cameras = step <= 0.0 && !g_fov_new_frame.load() &&
+                           (photo || (REXCVAR_GET(freecam) && g_debug_frames.load() > 0));
+  if (own_cameras) {
+    const double dt =
+        std::clamp(std::chrono::duration<double>(now - last).count(), 0.001, 0.1);
+    ctx.f1.f64 = dt;
+    sub_82168028(ctx, base);
+    ctx.f1.f64 = dt;
+    sub_82165270(ctx, base);
+    ctx.f1.f64 = dt;
+    sub_823B6660(ctx, base);
+    ctx.f1.f64 = 0.0;
+  }
   last = now;
-  ctx.f1.f64 = dt;
-  sub_82168028(ctx, base);
-  ctx.f1.f64 = dt;
-  sub_82165270(ctx, base);
-  ctx.f1.f64 = dt;
-  sub_823B6660(ctx, base);
-  ctx.f1.f64 = 0.0;
+  ReapplyFov(base, restored);
 }
 
 extern "C" REX_FUNC(sub_823A2098) {
@@ -463,6 +509,7 @@ extern "C" REX_FUNC(sub_82161000) {
   const bool player = camera && camera == g_player_camera.load();
   if (player) {
     RestoreGameFov(base);
+    g_fov_new_frame.store(true);
   }
   __imp__sub_82161000(ctx, base);
   if (!player) {

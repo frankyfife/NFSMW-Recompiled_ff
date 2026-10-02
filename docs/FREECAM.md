@@ -13,6 +13,7 @@ camera (`DebugWorldCameraMover`, camera action
 | Faster | Space, Backspace (even faster) | A, B |
 | Zoom | 1 wider, 3 narrower, K back to 71.5° | LB, RB, right stick click |
 | On / off | F6 | L3 + R3 (both stick clicks) |
+| World pause (photo mode) | F8 | Y |
 
 The car gets no input while the free camera is on. F6 (or L3 + R3) again
 gives the driving camera back. The stick clicks of the chord reach neither
@@ -20,11 +21,12 @@ the game nor the camera; a right stick click alone resets the zoom when it
 is released (not while the left one is held). There is no collision: the camera flies through
 buildings and under the ground.
 
-**Photo mode (F8):** the world stands still while the camera keeps
-flying: the simulation runs no steps (traffic, physics, sparks freeze). F8
-switches the free camera on if it is off; the world stops after about a
-second, once the game has hidden its HUD. F8 again lets the world run on;
-switching the free camera off (F6) ends the photo mode too.
+**Photo mode (F8, or Y on the controller with the free camera on):** the
+world stands still while the camera keeps flying: the simulation runs no
+steps (traffic, physics, sparks freeze). F8 switches the free camera on if
+it is off; the world stops after about a second, once the game has hidden
+its HUD. F8 (or Y) again lets the world run on; switching the free camera
+off (F6, L3 + R3) ends the photo mode too.
 
 ## How it works (app/src/freecam.cpp)
 
@@ -69,14 +71,25 @@ native renderer on: 13 MB from 0x82000000):
   has 14196 (78°) driving at rest, the debug camera writes 13020 (71.5°)
   every frame; the cube-map cameras have 90°. The movers write it before
   `sub_82161000`, which keeps the previous frame's at +420 for the
-  difference; the projection is built from it when the view is drawn
-  (`sub_8211D510`: half the angle, sin/cos). So the free camera's angle
+  difference; the projection is built from it when the views are drawn
+  (`sub_8243EC28`, per view, after the world update). So the free camera's angle
   (`freecam_fov`, LB/RB at 30° per second) or the driving camera's scaled one
   (`fov_scale`, only while the wanted action is `CDActionDrive`) is written
   right after `sub_82161000`, and the game's own is put back before the next
   world update (and before the next `sub_82161000`), so nothing reads the
   scaled value back and it never compounds (measured: the game's stays
-  14196 while 18454 is drawn at 130 %). The player's camera is found through
+  14196 while 18454 is drawn at 130 %). Frames without a simulation step
+  (the world steps every 1/60 s, so at 120 fps every other frame) run no
+  camera: the game's value put back before that world update stayed, and
+  those frames were drawn at it. Zooming the free camera then showed two
+  fields of view in turn, double images that no screenshot shows (fixed
+  2026-10-02: after a world update that handed the camera no new frame, the
+  written value goes back in; a 120 fps recording showed about a third of
+  the frames at the other field of view before, none after). The same
+  applied to the driving view with `fov_scale` at 120 fps. With the free
+  camera on, such frames now also run the cameras with the real time, as
+  photo mode does, so the free camera moves every frame instead of every
+  other one. The player's camera is found through
   the director: running action +40 is the mover, mover +28 its camera; it is
   only taken when it is one of the cameras `sub_82161000` has seen (while the
   director switches, the old action's +40 is no pointer; following it
