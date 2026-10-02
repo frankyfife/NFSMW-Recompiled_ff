@@ -353,6 +353,9 @@ struct Renderer::HostTexture {
 
 struct Renderer::Pipeline {
   ComPtr<ID3D12PipelineState> state;
+  // Its name in the pipeline cache: from the translated shaders and the
+  // state (the in-memory key has pointers that differ between runs).
+  std::wstring cache_name;
   // 0 being created (in the background), 1 ready, 2 failed.
   std::atomic<int> status{0};
   double compile_ms = 0;
@@ -1218,10 +1221,89 @@ UINT ComponentMapping(uint32_t swizzle, uint32_t host_swizzle) {
 
 }  // namespace
 
+void Renderer::OpenPipelineCache(const std::string& path) {
+  ComPtr<ID3D12Device1> device1;
+  if (FAILED(device_.As(&device1))) {
+    return;
+  }
+  pipeline_library_path_ = path;
+  if (FILE* f = std::fopen(path.c_str(), "rb")) {
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (size > 0) {
+      pipeline_library_blob_.resize(size_t(size));
+      if (std::fread(pipeline_library_blob_.data(), 1, size_t(size), f) != size_t(size)) {
+        pipeline_library_blob_.clear();
+      }
+    }
+    std::fclose(f);
+  }
+  // A cache from another driver or adapter is refused: start empty then.
+  if (pipeline_library_blob_.empty() ||
+      FAILED(device1->CreatePipelineLibrary(pipeline_library_blob_.data(),
+                                            pipeline_library_blob_.size(),
+                                            IID_PPV_ARGS(&pipeline_library_)))) {
+    pipeline_library_blob_.clear();
+    pipeline_library_.Reset();
+    device1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&pipeline_library_));
+  }
+}
+
+void Renderer::SavePipelineCache() {
+  if (!pipeline_library_ || !pipeline_library_stored_.exchange(0)) {
+    return;
+  }
+  std::vector<uint8_t> data;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_library_mutex_);
+    data.resize(pipeline_library_->GetSerializedSize());
+    if (data.empty() || FAILED(pipeline_library_->Serialize(data.data(), data.size()))) {
+      return;
+    }
+  }
+  const std::string temporary = pipeline_library_path_ + ".new";
+  if (FILE* f = std::fopen(temporary.c_str(), "wb")) {
+    const bool written = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+    std::fclose(f);
+    if (written) {
+      MoveFileExA(temporary.c_str(), pipeline_library_path_.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+  }
+}
+
+bool Renderer::TryLoadCachedPipeline(Pipeline& pipeline,
+                                     const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc) {
+  if (!pipeline_library_ || pipeline.cache_name.empty()) {
+    return false;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(pipeline_library_mutex_);
+  if (FAILED(pipeline_library_->LoadGraphicsPipeline(pipeline.cache_name.c_str(), &desc,
+                                                     IID_PPV_ARGS(&pipeline.state)))) {
+    return false;
+  }
+  ++pipelines_from_cache_;
+  pipeline.compile_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  pipeline.status.store(1, std::memory_order_release);
+  return true;
+}
+
 void Renderer::CreatePipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc) {
   const auto start = std::chrono::steady_clock::now();
+  if (TryLoadCachedPipeline(pipeline, desc)) {
+    return;
+  }
   const HRESULT created =
       device_->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline.state));
+  if (SUCCEEDED(created) && pipeline_library_ && !pipeline.cache_name.empty()) {
+    std::lock_guard<std::mutex> lock(pipeline_library_mutex_);
+    if (SUCCEEDED(pipeline_library_->StorePipeline(pipeline.cache_name.c_str(),
+                                                   pipeline.state.Get()))) {
+      ++pipeline_library_stored_;
+    }
+  }
   pipeline.compile_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipeline.status.store(SUCCEEDED(created) ? 1 : 2, std::memory_order_release);
@@ -1463,6 +1545,22 @@ void Renderer::Draw(const DrawCall& d) {
   auto& pipeline = pipelines_[HashBytes(&key, sizeof(key))];
   if (!pipeline) {
     pipeline = std::make_unique<Pipeline>();
+    if (pipeline_library_) {
+      // Shaders by content, then the key without its three pointers.
+      uint64_t name = HashBytes(vertex_translation->translated_binary().data(),
+                                vertex_translation->translated_binary().size());
+      if (pixel_translation) {
+        name = (name * 1099511628211ull) ^
+               HashBytes(pixel_translation->translated_binary().data(),
+                         pixel_translation->translated_binary().size());
+      }
+      const uint8_t* rest = reinterpret_cast<const uint8_t*>(&key.topology_type);
+      name = (name * 1099511628211ull) ^
+             HashBytes(rest, sizeof(key) - size_t(rest - reinterpret_cast<const uint8_t*>(&key)));
+      wchar_t text[24];
+      std::swprintf(text, 24, L"%016llx", static_cast<unsigned long long>(name));
+      pipeline->cache_name = text;
+    }
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
     desc.pRootSignature = root;
     desc.VS = {vertex_translation->translated_binary().data(),
@@ -1527,7 +1625,11 @@ void Renderer::Draw(const DrawCall& d) {
     }
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     desc.SampleDesc.Count = key.samples;
-    if (async_pipeline_threads_) {
+    // From the cache of earlier runs right here (well under a millisecond, so
+    // no draw waits for it and no frame is held back); only new ones are
+    // created in the background.
+    if (TryLoadCachedPipeline(*pipeline, desc)) {
+    } else if (async_pipeline_threads_) {
       // In the background: a pipeline the driver has not compiled before took
       // up to 350 ms, the whole renderer stood still meanwhile. The draws that
       // need it are skipped until it is there (a few frames).

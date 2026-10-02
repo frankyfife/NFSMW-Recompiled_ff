@@ -629,6 +629,18 @@ its own fix:
    after a failed walk, is not shown either. With the check, recordings of
    normal play: 0 such frames (see the measurements below).
 
+**Pipeline cache (`native_renderer_pipeline_cache`):** created pipelines
+are kept in an ID3D12PipelineLibrary, written to `native_pipelines.bin` next
+to the game whenever new ones were stored (checked every 10 s; a cache from
+another driver is refused and started again). The name of a pipeline comes
+from its translated shaders and its state, since the in-memory key holds
+pointers. A pipeline the cache has is loaded right at the draw (well under
+a millisecond); only new ones go to the background threads. Measured: first
+run 2-6 frames per 10 s held back for pipelines and 1465 draws waiting at
+the first free roam frame; next run (121 pipelines from the cache, 2.7 MB)
+none, every draw of that frame drawn. That frame still takes 114 ms: 82 ms
+loading 301 textures.
+
 `[native renderer] vertex data in 10 s` in the log shows all of it; frames
 over 30 ms on the renderer thread are logged with their breakdown
 (`slow frame`).

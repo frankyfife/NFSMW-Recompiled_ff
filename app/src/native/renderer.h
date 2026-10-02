@@ -15,6 +15,7 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <map>
@@ -137,6 +138,12 @@ class Renderer {
   // Draw from the recorded vertex data (DrawCall::data_copies) where it
   // differs from memory; false only counts the differences.
   void SetApplyDataCopies(bool value) { apply_data_copies_ = value; }
+  // Pipelines kept on disk between runs (ID3D12PipelineLibrary): created
+  // pipelines are stored, and loaded instead of compiled the next time.
+  // Before the first frame; SavePipelineCache writes it if it changed.
+  void OpenPipelineCache(const std::string& path);
+  void SavePipelineCache();
+  uint32_t pipelines_from_cache() const { return pipelines_from_cache_.load(); }
   // Pipelines created by this many background threads (0: when first needed,
   // on the calling thread); draws are skipped until theirs is ready.
   void SetAsyncPipelineThreads(uint32_t threads) { async_pipeline_threads_ = threads; }
@@ -245,6 +252,7 @@ class Renderer {
   }
   bool CreatePresentPipeline();
   void CreatePipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
+  bool TryLoadCachedPipeline(Pipeline& pipeline, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
   void StartPipelineWorkers();
   bool EnsureOcclusionQueries();
   void OcclusionBegin();
@@ -312,6 +320,11 @@ class Renderer {
   int32_t msaa_override_ = -1;
   int32_t mip_mode_ = 0;
   bool apply_data_copies_ = true;
+  ComPtr<ID3D12PipelineLibrary> pipeline_library_;
+  std::vector<uint8_t> pipeline_library_blob_;  // must outlive the library
+  std::string pipeline_library_path_;
+  std::mutex pipeline_library_mutex_;
+  std::atomic<uint32_t> pipeline_library_stored_{0}, pipelines_from_cache_{0};
   // Pages the last draw's recorded data was written into: synced again from
   // memory before the next draw (other draws see the memory as today).
   std::vector<uint32_t> overlay_pages_;

@@ -65,6 +65,9 @@ REXCVAR_DEFINE_INT32(native_renderer_pipeline_threads, 3, "Debug",
 REXCVAR_DEFINE_BOOL(native_renderer_copy_draw_data, true, "Debug",
                     "With native_renderer: draw UP and non-indexed draws from their vertex data "
                     "as it was when the game drew them (false: only count where it differs)");
+REXCVAR_DEFINE_BOOL(native_renderer_pipeline_cache, true, "Debug",
+                    "With native_renderer: keep created pipelines on disk "
+                    "(native_pipelines.bin) and load them in later runs");
 REXCVAR_DEFINE_BOOL(native_renderer_hold_incomplete, true, "Debug",
                     "With native_renderer: a frame with draws still waiting for their pipeline "
                     "is not shown (the previous one stays, at most 30 frames)");
@@ -954,6 +957,10 @@ void Parallel::Thread() {
     REXLOG_ERROR("[native renderer] no memory for the guest memory copy");
     return;
   }
+  // Pipelines of earlier runs, next to the game (native_pipelines.bin).
+  if (REXCVAR_GET(native_renderer_pipeline_cache)) {
+    renderer.OpenPipelineCache("native_pipelines.bin");
+  }
   if (window && !renderer.CreateWindowOutput(window)) {
     REXLOG_ERROR("[native renderer] window output failed");
   }
@@ -1027,6 +1034,10 @@ void Parallel::Thread() {
       if (const uint64_t misaligned = walks_misaligned_.exchange(0)) {
         REXLOG_WARN("[native renderer] {} shader load scans did not end at the write pointer",
                     misaligned);
+      }
+      renderer.SavePipelineCache();
+      if (const uint32_t cached = renderer.pipelines_from_cache()) {
+        REXLOG_INFO("[native renderer] pipelines loaded from the cache so far: {}", cached);
       }
       {
         static uint64_t logged_differed = 0, logged_differed_bytes = 0;
