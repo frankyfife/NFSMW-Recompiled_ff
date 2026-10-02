@@ -785,20 +785,22 @@ Read from the patched SDK (v0.10.0 with all `tools/parche_*.py`) and
 the SDK's command processor (thread "GPU Commands") still reads the whole
 command stream the D3D library writes, including the main scene three times
 for the tiles (5268 draw packets in the stage 1 frame). It only skips the
-draws and resolves (`ExecutePacketType3Draw`) and the counting of ZPD samples.
+draws and resolves (`ExecutePacketType3Draw`) and the counting of ZPD samples;
+since step 1 (below) also the shader loads and the emulated front buffer at
+the swap. The table shows the state after step 1.
 
 | Element | What runs now | Needed by the game | Native or removable |
 |---|---|---|---|
 | PM4 parsing (ring, indirect buffers, tile replays) | everything | yes: fences, swaps and interrupts are in the stream | stays; can get thinner (rows below) |
 | Register writes (type 0, `SET_CONSTANT`, `LOAD_ALU_CONSTANT`) | every value into the register file; fetch constants also clear bits for the texture cache's bindings and the vertex buffer residency. The float constants' usage check only runs while a frame is open, which with the native renderer is only inside the swap | only the scratch registers, `COHER_STATUS_HOST` and the gamma ramp (`DC_LUT_*`) | stays: a copy and a few bit operations, and the emulation needs the values if it draws again |
-| Shader loads (`IM_LOAD`, `IM_LOAD_IMMEDIATE`) | `PipelineCache::LoadShader`: XXH3 of the microcode, a map lookup, a `D3D12Shader` per new program | no, only the emulated draws used them | deferred (step 1, done) |
-| Draw packets | parsed; per packet `NfsmwNativeSkipEmulation()`, which locked `shared_mutex_` in `Renderer::GetSharedFrame` (also per ZPD event) | no | an atomic flag set at the first shared frame instead of the lock, uncapped about 1.5 million locks per second (step 1, done) |
+| Shader loads (`IM_LOAD`, `IM_LOAD_IMMEDIATE`) | the last load per type is remembered (inline microcode copied), loaded at the first draw the emulation runs again. Before step 1: `PipelineCache::LoadShader` for every load, XXH3 of the microcode, a map lookup, a `D3D12Shader` per new program | no, only the emulated draws use them | deferred (step 1, done) |
+| Draw packets | parsed; per packet (and per shader load and ZPD event) `NfsmwNativeSkipEmulation()`, an atomic load. Before step 1 it locked `shared_mutex_` in `Renderer::GetSharedFrame`, uncapped about 1.5 million times per second | no | the atomic flag set at the first shared frame (step 1, done) |
 | Fences (`EVENT_WRITE_SHD`, `MEM_WRITE`, scratch register writeback) and the ring's read pointer | written as soon as the emulator *parses* the packet | yes | the one that matters, see below |
 | `WAIT_REG_MEM` | polls memory or a register | yes | stays |
 | `INTERRUPT` | the guest's interrupt callback | yes | stays |
 | `EVENT_WRITE_ZPD` | only `VGT_EVENT_INITIATOR`; the native renderer writes the reports | yes | native (done) |
 | `EVENT_WRITE_EXT` | fixed full-screen extents | probably not | stays (cheap) |
-| `XE_SWAP` → `IssueSwap` | `RequestSwapTexture` for the emulated front buffer (texture cache lookup, loaded from guest memory if it changed) **before** the native frame is asked for; then up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output | the swap yes, the emulated front buffer no | `RequestSwapTexture` only when there is no native frame (step 1, done). A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
+| `XE_SWAP` → `IssueSwap` | up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output; `RequestSwapTexture` for the emulated front buffer only without a native frame. Before step 1 it ran at every swap, before the native frame was asked for (texture cache lookup, loaded from guest memory if it changed) | the swap yes, the emulated front buffer no | `RequestSwapTexture` only without a native frame (step 1, done). A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
 | Small resolves (≤ 64 KB, exposure) | written into guest memory by the native renderer once its GPU finished the frame | yes | native (done) |
 | Shared memory, texture cache, EDRAM / render target cache, primitive processor | idle: no draw requests anything. Textures and watched pages from before the native renderer took over stay until evicted or written | no | could be released after the takeover (video memory), low priority |
 
@@ -857,8 +859,10 @@ missing.
 
 **Step 1 (2026-10-02, not measured yet).** `NfsmwNativeSkipEmulation`
 reads an atomic flag the renderer sets with its first shared frame instead
-of locking its mutex. The command processor asks it once per draw packet
-(`NativeRendererDraws`). While it says yes, `IM_LOAD` only remembers the
+of locking its mutex. The command processor asks it at every draw packet,
+`IM_LOAD` and `IM_LOAD_IMMEDIATE` (`NativeRendererDraws`), the D3D12 one at
+every `EVENT_WRITE_ZPD`; without the lock each is an atomic load. While it
+says yes, `IM_LOAD` only remembers the
 address and `IM_LOAD_IMMEDIATE` copies the microcode (the ring is reused),
 per shader type; the first draw the emulation runs again
 (`native_renderer_skip_emulation` off, or `gpu_capture_frame`) loads them,
@@ -869,10 +873,15 @@ cache only without one. Checked here: the SDK files and `parallel.cpp` /
 before (only the known MinGW differences); `generar_parche_ff.py` and the
 end-to-end check give `clean rebuild matches working SDK: True`. To measure
 on Windows: the GPU thread ("GPU Commands") with `tools/cpuprof`, before and
-after, uncapped in free roam; the picture must stay the same, and switching
-`native_renderer_skip_emulation` off while playing (F4) must let the
-emulation draw again with the right shaders (compare with
-`--native_renderer_skip_emulation=false` from the start).
+after, uncapped in free roam; the picture must stay the same. The switch
+back: turning `native_renderer` off while playing (F4) makes the game's
+window show the emulation's picture again, whose first draws use the
+deferred loads; it must look like a run with `--native_renderer=false`.
+(Turning only `native_renderer_skip_emulation` off lets the emulation draw
+too, but the window keeps showing the native picture.) An SDK with the
+previous `parche_ff.py` applied needs `python tools\parche_ff.py --revertir`
+with that previous version before updating; the new one refuses to apply
+over it and changes nothing.
 
 ## Options
 

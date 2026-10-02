@@ -71,9 +71,10 @@ src/graphics/command_processor.cpp
     miles por fotograma); se guarda la ultima carga de cada tipo (el
     microcode en linea se copia, el anillo se reutiliza) y se carga en el
     primer draw que vuelva a ejecutar la emulacion (native_renderer_skip_
-    emulation apagado, o con gpu_capture_frame). Una sola consulta de
-    NfsmwNativeSkipEmulation por draw; en el ejecutable ya no bloquea un
-    mutex (antes ~5300 veces por fotograma con los tiles). SIN MEDIR todavia
+    emulation apagado, o con gpu_capture_frame). NfsmwNativeSkipEmulation se
+    consulta en cada draw y en cada carga de shader; en el ejecutable ya no
+    bloquea un mutex sino que lee un atomico (antes, solo los draws, ~5300
+    bloqueos por fotograma con los tiles). SIN MEDIR todavia
     (docs/NATIVE_RENDERER.md, "What the GPU emulation still does").
 src/graphics/d3d12/command_processor.cpp
     Igual para EVENT_WRITE_ZPD: con el renderer nativo solo se escribe el
