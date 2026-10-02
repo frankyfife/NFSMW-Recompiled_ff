@@ -638,7 +638,12 @@ its own fix:
    8000+ pixels brighter than both neighbours), 1 with dark streaks from the
    skid marks, 8 without a visible error; no large glitch in a frame without
    the mark. So the check catches the stripes, and holding those frames
-   (about 10 per minute, at 120 fps not to be seen) stays.
+   (at 120 fps not to be seen) stays. The same drive without the
+   diagnostics, warm pipeline cache: no glitch left (the largest flagged
+   frames are sparks, 1000-1600 pixels), 0 frames held for pipelines, 57
+   held for a stride mismatch in 60 s of driving in circles with sparks and
+   skid marks (0 in the minute before it). Next step if those should be
+   drawn instead: find where the library loads the patched shader for them.
 
 **Pipeline cache (`native_renderer_pipeline_cache`):** created pipelines
 are kept in an ID3D12PipelineLibrary, written to `native_pipelines.bin` next
