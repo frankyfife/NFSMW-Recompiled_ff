@@ -1,7 +1,57 @@
 # El lanzador
 
+> **Fork note (2026-10-03).** This document describes the C# WinForms launcher
+> (`tools/lanzador/Lanzador.cs`, built by `CONSTRUIR_LANZADOR.bat`). In this fork it is
+> only the fallback: `CONSTRUIR.bat` builds the Qt launcher (`launcher-windows/`) and
+> builds this one only when the Qt build fails, for example because Qt is not installed.
+> The main launcher is described in [LAUNCHER.md](LAUNCHER.md).
+>
+> The C# launcher does not pass `--native_renderer`, so the game runs on the GPU
+> emulation (the cvar defaults to false), unless `nfsmw.toml` sets it: an Esc-menu change
+> in a game started from the Qt launcher writes `native_renderer = true` there, with the
+> launcher's other arguments (see [LAUNCHER.md](LAUNCHER.md#arguments-always-passed),
+> "Precedence"). It has none of the fork's options: native
+> renderer scale, MSAA, mipmaps, frame rate target and frame pacing, G-Sync / FreeSync,
+> field of view, post-processing, car detail, Black Edition, Unlock everything, language.
+>
+> What below is outdated for the main (Qt) launcher:
+>
+> - **"Es lo que se abre para jugar"** (intro): the window that opens from
+>   `NFS_Most_Wanted.exe` is now the Qt launcher. The file names in "Los nombres" are the
+>   same for both launchers; the icon is not: the Qt launcher's is its own artwork (an
+>   amber square with speed chevrons, `launcher-windows/res/make_icon.py`), not the game's.
+> - **"Los ajustes"**: the Qt launcher stores its settings in `launcher.ini` (INI format)
+>   in its root folder (next to it in `build\`; the repository root when it runs from
+>   `launcher-windows\out\` and finds the game in `app\out\`), not in `lanzador.json`, and
+>   shares nothing with this launcher or `lanzador.ps1`.
+> - **"Motor de vídeo" and "API gráfica"**: the Qt launcher has neither option. It always
+>   passes `--gpu_backend=d3d12` and `--native_renderer=true`, because the native
+>   renderer is Direct3D 12. The reason given in "Por qué la API gráfica no tiene
+>   automático" still holds: the command line wins over `nfsmw.toml`.
+> - **"Los dos ajustes de resolución"**: in the Qt launcher, Resolution goes to
+>   `--resolution` (window resolution and video mode) and Render scale (AA), 1×-4×, goes
+>   to `--native_renderer_scale`, a multiple of 1280 × 720, so its note does show the
+>   size in pixels. `--resolution_scale` is always 1, because the emulation draws
+>   nothing.
+> - **"Fotogramas"** (vsync and fps limit): the Qt launcher sets a target of 30, 60,
+>   Unlimited or Custom 10-240 through `--frame_pacing_fps`, passes `--max_fps=0`, and
+>   has V-Sync on by default.
+> - **"Argumentos fijos"**: the Qt launcher's fixed list is longer (it adds
+>   `--native_renderer=true`, `--resolution_scale=1`, `--guest_vblank_rate=1000` and
+>   `--max_fps=0`, among others) and every argument goes as
+>   `--name=value`: with `--name value` the cvars that live in the GPU plugin DLL
+>   (`frame_pacing_fps`, `guest_vblank_rate`) were silently left at their defaults. The
+>   full list is in [LAUNCHER.md](LAUNCHER.md#arguments-always-passed).
+> - **"La portada"**: the Qt launcher reads `portada.jpg` from the same root folder as
+>   `launcher.ini` at start instead of building it into the exe, and draws a pattern when
+>   it is missing.
+> - **"Los nombres"**: started directly, `nfsmw.exe` also uses the GPU emulation, unless
+>   `nfsmw.toml` sets `native_renderer` (which happens after an Esc-menu change in a game
+>   started from the Qt launcher, see above).
+
 Ventana nativa de Windows en C# con WinForms, con la portada del juego al lado en plan
-instalador. Es lo que se abre para jugar.
+instalador. ~~Es lo que se abre para jugar.~~ (Fork note: only when the Qt launcher could
+not be built; see above.)
 
 ## Compilarlo
 

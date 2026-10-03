@@ -1,6 +1,6 @@
 # NFS Most Wanted Recompiled - Windows launcher (Qt 6 Widgets)
 #
-# Standalone project, built by CONSTRUIR_LANZADOR.bat:
+# Standalone project, built by launcher-windows\build.bat:
 #   cmake -S launcher-windows -B launcher-windows/out -G Ninja
 #         -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<Qt>/msvc2022_64
 # Qt's MSVC binaries need the MSVC compiler (cl), not clang.

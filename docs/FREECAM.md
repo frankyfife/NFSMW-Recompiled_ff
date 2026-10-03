@@ -87,9 +87,14 @@ native renderer on: 13 MB from 0x82000000):
   written value goes back in; a 120 fps recording showed about a third of
   the frames at the other field of view before, none after). The same
   applied to the driving view with `fov_scale` at 120 fps. With the free
-  camera on, such frames now also run the cameras with the real time, as
-  photo mode does, so the free camera moves every frame instead of every
-  other one. The player's camera is found through
+  camera on, such frames now also run the cameras (unless the world update
+  already handed the camera a new frame), so the free camera shows a new
+  pose every frame instead of every other one. Outside photo mode they run
+  with a token 1 ms, since the next simulation step hands the cameras the
+  whole 1/60 s again; only photo mode, where no step runs at all, gives them
+  the real time since the last frame (clamped to 1-100 ms). The free camera
+  moves by its own clock either way (see "Camera movement" above); this pass
+  only hands it a new frame. The player's camera is found through
   the director: running action +40 is the mover, mover +28 its camera; it is
   only taken when it is one of the cameras `sub_82161000` has seen (while the
   director switches, the old action's +40 is no pointer; following it

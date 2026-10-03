@@ -1,5 +1,5 @@
-// Native renderer in the running game, in parallel to the emulated GPU (stage 4
-// of docs/NATIVE_RENDERER.md, development mode).
+// Native renderer in the running game, next to the emulated GPU (stage 4 of
+// docs/NATIVE_RENDERER.md; the Qt launcher's default since 2026-10-01).
 //
 // With --native_renderer=true the D3D hooks (render_census.cpp ->
 // render_capture.cpp) record every draw and resolve of a frame: the device's
@@ -9,12 +9,14 @@
 // goes into a texture shared with the emulator's Direct3D 12 device, which
 // shows it in the game's window instead of its own (NfsmwNativeFrame below,
 // tools/parche_ff.py: IssueSwap); with native_renderer_window also in a second
-// window. The emulation still draws every frame; if the renderer is busy, a
-// frame is dropped (the game's window shows the previous one).
+// window. Once the emulator's swap shows the native frame, the emulation skips
+// its draws, resolves and shader loads (NfsmwNativeSkipEmulation,
+// native_renderer_skip_emulation).
 //
-// The renderer reads vertices, indices and textures straight from guest
-// memory (a D3D12 heap opened on it), while the game goes on: data the game
-// changes in between can show up as glitches in the second window.
+// The renderer reads vertices, indices and textures from guest memory (a D3D12
+// heap opened on it) a frame after the game recorded them; the data the game
+// can refill meanwhile is copied at the draw (native_renderer_copy_draw_data)
+// and the game is kept at most a frame ahead (native_renderer_bound_lead).
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -49,8 +51,9 @@
 
 REXCVAR_DEFINE_BOOL(native_renderer, false, "Debug",
                     "Draw every frame with the native Direct3D 12 renderer and show its picture in "
-                    "the game's window instead of the emulation's (development; the emulation "
-                    "still draws every frame too)");
+                    "the game's window instead of the emulation's (the launcher turns it on); "
+                    "once the native frame is shown, the emulation skips its draws and resolves "
+                    "(see native_renderer_skip_emulation)");
 REXCVAR_DEFINE_BOOL(native_renderer_skip_emulation, true, "Debug",
                     "With native_renderer: the emulation skips its draws and resolves once the "
                     "native renderer delivers frames (false = both draw, for comparing)");

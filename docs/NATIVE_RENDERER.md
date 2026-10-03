@@ -1,5 +1,43 @@
 # Native renderer for NFSMW: feasibility study (2026-10-01)
 
+> **Status (2026-10-03, commit 63684bb).** The study below turned into the
+> native Direct3D 12 renderer (`app/src/native`); this document is its log,
+> oldest first.
+>
+> - **Default in the launcher since 2026-10-01.** The Qt launcher always
+>   passes `--native_renderer=true --gpu_backend=d3d12`. `nfsmw.exe` started
+>   on its own (or through the C# fallback launcher) still uses the GPU
+>   emulation: the cvar `native_renderer` defaults to false
+>   (`app/src/native/parallel.cpp`) and the shipped `nfsmw.toml` does not
+>   set it. The native renderer only takes over once the emulator's swap can
+>   open its frame (Direct3D 12, same GPU; `NfsmwNativeFrameShown`);
+>   otherwise the emulation keeps drawing.
+> - **Numbers.** Uncapped in free roam, 2160p, render scale 2: 298-326 fps
+>   driving, about 366-376 standing; the renderer thread needs 1.8-2.3 ms per
+>   frame. Earlier (2026-10-01, uncapped free roam, before supersampling
+>   existed) the GPU emulation alone reached 148 fps and the native renderer
+>   263-271, in separate runs measured the same way. Entering an area, the
+>   texture loads went from 76 ms to 5.9 ms (2026-10-02: placed resources in
+>   64 MB heaps and untiling threads; the 5.9 ms already with all mip
+>   levels). The GPU thread is busy 22.0 % instead of 25.7 % since step 1
+>   (2026-10-03).
+> - **What the GPU emulation still does:** it reads the whole PM4 command
+>   stream (registers, fences, `WAIT_REG_MEM`, interrupts, swaps, tile
+>   replays) and skips the draws, resolves, ZPD sample counting (since
+>   2026-10-03 also the host occlusion query chain), shader loads and its own
+>   front buffer; see
+>   [What the GPU emulation still does](#what-the-gpu-emulation-still-does-read-from-the-code-2026-10-02).
+> - **Proposed next steps** (from "Order proposed" in that section, whose
+>   step 1 is done): first diagnostics for the fences (which, how many, who
+>   waits and how long); then native fences and read pointer with a time-out
+>   fallback, and `native_renderer_copy_draw_data` and
+>   `native_renderer_bound_lead` tried off; only then
+>   [option A](#options).
+> - The "Still open", "Next" and "Next concrete steps" lists further down
+>   are history; each has a note saying what became of it. Stage 4's first
+>   paragraph ("The emulation still draws every frame") is outdated too: see
+>   "The emulation no longer draws" further down in that section.
+
 Question: can NFSMW draw natively, as The Darkness Recomp does
 (`D:\Projekte\The-Darkness-Recomp_ff`), instead of emulating the Xenos GPU
 command stream?
@@ -116,6 +154,9 @@ semantics** too, it just skips the command stream.
   called entry points `sub_825953D8`/`sub_82594C70` appear at load time.
 - Still open: which function sets the headers up, and whether the data can
   change afterwards without Lock. That would matter for streaming.
+  *History (2026-10-03): not answered, and the native renderer does not need
+  it: it samples each texture's memory every frame and reloads it when it
+  changed (see "Half-loaded textures" below).*
 
 **Shaders for B:**
 - Translating them on our own is not required. The existing translator in
@@ -222,6 +263,11 @@ inclusive):
   - Clear (`sub_8259A500`?).
   - The 14 index-buffer exceptions.
 
+  *History (2026-10-03): answered in stage 3 below as far as the renderer
+  needed it: the resolve arguments and destinations (the individual bits of
+  the flags argument are not decoded there), the clear as part of the
+  resolve, and the 4 KB offset of the 0xE range for the index buffers.*
+
 ## Stage 3 result: the frame drawn natively (2026-10-01)
 
 **The frame graph** (`tools/renderprobe/resolves.py`, frame 6500 standing in
@@ -321,6 +367,12 @@ at start in the audio thread. The SDK now falls back to a silent output
 3. Then the step to the game: drive the renderer from the D3D hooks in the
    running game instead of from a file (first in parallel, showing its image
    in a second window), see "Switch over" below.
+
+*History (2026-10-03): 2 and 3 are done (stage 4 below: the renderer runs in
+the game and shows its picture in the game's window). 1 is partly done:
+main menu and title screen render, and stage 4 compares the picture with the
+emulation's in free roam; this document has no comparison for night, rain or
+a race.*
 
 ## Stage 4: the native renderer running in the game (2026-10-01)
 
@@ -881,7 +933,8 @@ deferred loads; it must look like a run with `--native_renderer=false`.
 too, but the window keeps showing the native picture.) An SDK with the
 previous `parche_ff.py` applied needs `python tools\parche_ff.py --revertir`
 with that previous version before updating; the new one refuses to apply
-over it and changes nothing.
+over it and changes no text block (the new files from `tools/sdk_nuevos/` are
+still copied).
 
 Measured on Windows (2026-10-03, RTX 5090, 2160p, render scale 2, uncapped,
 driving in circles in free roam, `tools/cpuprof` 10 s on "GPU Commands"):
@@ -890,6 +943,9 @@ driving in circles in free roam, `tools/cpuprof` 10 s on "GPU Commands"):
 |---|---|---|---|---|
 | before step 1 | 25.7 % | 17.0 % | 0.35 % | 316 |
 | after step 1 | 22.0 % | 14.6 % | 0.02 % | 298-326 |
+
+In the same run (its log): 366-376 fps standing in free roam, 298-326 driving;
+every recorded frame was drawn, 1.8-2.3 ms each on the renderer thread.
 
 The game thread still sets the frame rate (the main thread is 94 % in the
 game's code either way), so the gain shows on the GPU thread only: about a
@@ -972,3 +1028,9 @@ reading the device shadow) are part of stage 1 anyway.
 3. Prototype A for a single path: log what DrawIndexedVertices plus flush
    would send, and compare it with what the CP receives from the ring. The
    result must be identical before anything is replaced.
+
+*History (2026-10-03): the project went for B (stages 1-4 above). Steps 1
+and 2 were done as far as the native renderer needed them (the entry point
+tables and the device shadow layout near the top); step 3, option A, is
+still open and comes after native fences (see "Order proposed" in
+[What the GPU emulation still does](#what-the-gpu-emulation-still-does-read-from-the-code-2026-10-02)).*

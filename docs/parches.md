@@ -2,8 +2,70 @@
 
 Catálogo de lo que este proyecto cambia en el SDK, por qué, y cómo se comprobó.
 
-Todos se aplican sobre el fuente de `..\rexglue-sdk` antes de compilarlo. Ninguno toca
-el código del juego.
+Todos se aplican sobre el fuente de `..\rexglue-sdk` antes de compilarlo. ~~Ninguno toca
+el código del juego.~~ *(Fork: no longer true, see "This fork" below.)*
+
+## This fork (2026-10-03)
+
+The Spanish catalog below describes the nine upstream patches and is still correct for
+them. This fork adds a tenth, `tools/parche_ff.py`, and two statements in this page are
+outdated:
+
+- **"No patch touches the game code" is no longer true.** `parche_ff.py` changes
+  `include/rex/platform/fpscr.h`, a header the generated game code includes inline, so
+  after applying or reverting it the game has to be rebuilt as well, not only the SDK.
+  And the native renderer (`app/src/native`) compiles SDK sources (the Xenos shader
+  translator under `src/graphics/pipeline/shader/` and a few others, taken from
+  `..\rexglue-sdk`) into `nfsmw.exe`, so an SDK patch to those files ends up in the game
+  executable too (`parche_ff.py` patches `translator_disasm.cpp`, one of them).
+- **The red warning about the presenter patch** ("El lanzador avisa en rojo", in the
+  `parche_presentador.py` section) is shown by the C# launcher (`tools/lanzador`), which
+  looks for the patch marker in the SDK source. The Qt launcher (`launcher-windows/`) has
+  no such check: it always passes `--max_fps=0` and sets the frame rate with
+  `frame_pacing_fps`, which comes from `parche_ff.py`.
+
+### `parche_ff.py`: the fork's SDK changes
+
+By far the largest patch (about 166 KB: 126 text blocks in 23 SDK files, plus one new
+file, `include/rex/graphics/frame_pacer.h`, copied from `tools/sdk_nuevos/`). Its header
+lists every change with the reason and the measurements. In short: floating-point
+exceptions always masked (without it the game dies with 0xC000008F before the menu);
+frame pacing (`guest_vblank_rate`, `frame_pacing_fps`, pacing in `VdSwap`, low-latency
+mode, adaptive pacing, smoothing, display lock, the G-Sync / FreeSync mode
+`frame_pacing_vrr`, one present per game frame) and frame time recording
+(`frame_times_dir`, F10 in game); the SDK side of the native renderer (`IssueSwap` shows
+the native frame; while it does, the emulation skips draws, resolves, shader loads, ZPD
+sample counting and the host occlusion query chain) and ZPD occlusion queries as a
+continuous counter; GPU-thread performance (texture heaps, hot pages, register block
+writes, `readback_resolve_max_kb`); controller input passed through the free camera
+(`NfsmwInputFilter`, exported by `nfsmw.exe`); the XMA fix for cut sound effects; running
+without an audio device; a window larger than the screen; and diagnostics
+(`log_guest_fps`, `gpu_capture_frame`, `audio_dump_file`).
+
+How it is maintained:
+
+- **Order.** `CONSTRUIR.bat` applies it last, after the other nine. It has to come after
+  `parche_presentador.py`: its `d3d12_presenter.cpp` block is anchored in that patch's
+  `Present`.
+- **Generated, not edited by hand.** The SDK in `..\rexglue-sdk` is changed directly,
+  then `python tools\generar_parche_ff.py` rewrites the `BLOQUES` list of
+  `parche_ff.py`. The baseline is not the SDK's git HEAD but HEAD with the other nine
+  patches applied in `CONSTRUIR.bat`'s order, so files that other patches touch too are
+  diffed correctly; new files are copied into `tools/sdk_nuevos/`. The files it diffs
+  are listed in `FICHEROS` / `NUEVOS` at the top of the generator (a newly touched SDK
+  file has to be added there). The descriptive header of `parche_ff.py` is not
+  regenerated.
+- **Check.** `python tools\dev\e2e_check.py` applies the new `parche_ff.py` to a fresh
+  baseline and compares it with the working SDK. It must print
+  `clean rebuild matches working SDK: True`.
+- **Updating an SDK that has an older `parche_ff.py` applied.** Run that older version
+  with `--revertir` first. `parche_ff.py` keeps no old versions of its blocks (the
+  migration rule further down does not apply to it), so the new version refuses to
+  apply over the old one: the anchors of the changed blocks are not found exactly once
+  and it writes none of its blocks. (The new file from `tools/sdk_nuevos/` is copied
+  before the blocks are checked, so `frame_pacer.h` is already the new one then.)
+- **After applying or reverting**, rebuild the SDK **and** the game (the script prints
+  that reminder), and copy both `rexruntime.dll` and `rexgpu-xenos.dll` into `build\`.
 
 ## Cómo se usan
 
@@ -54,6 +116,9 @@ De fábrica **ninguno de los dos funciona**:
 - No había ningún limitador de fps. Ninguno.
 
 Este parche arregla las dos cosas. El lanzador avisa en rojo si no está aplicado.
+
+> **Fork note:** the warning is only in the C# launcher (`tools/lanzador`). The Qt
+> launcher passes `--max_fps=0` and paces with `frame_pacing_fps` from `parche_ff.py`.
 
 ### `parche_gpu_fallback.py` — no morir sin GPU
 

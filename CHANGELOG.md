@@ -2,6 +2,99 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [ff fork] - 2026-09-29 to 2026-10-03
+
+Changes of the [frankyfife fork](https://github.com/frankyfife/NFSMW-Recompiled_ff) on top
+of 0.0.2 (entries in English; the details and measurements are in the README,
+`docs/NATIVE_RENDERER.md`, `docs/FREECAM.md` and the header of `tools/parche_ff.py`).
+
+### Added
+
+- **Native Direct3D 12 renderer** (`app/src/native/`, 2026-10-01): the game's draw calls
+  are recorded where its Direct3D library issues them and drawn by a renderer of its own
+  on a second thread; the GPU emulation no longer draws. The Qt launcher always starts it
+  (`nfsmw.exe` on its own still uses the emulation). Free roam uncapped: 148 fps on this
+  fork's emulation path, 263-271 with the native renderer in the same run; 298-326 now
+  (2160p, render scale 2).
+- Native renderer settings, in the launcher and the Esc menu: render scale 1-4×
+  (supersampling), MSAA, anisotropic filtering, mipmaps (game / sharper / off).
+- Game options for either renderer: post-processing switch, cars at full detail at any
+  distance (car LOD).
+- Native renderer: dynamic shadows, occlusion queries (sun glare behind buildings),
+  pipelines created in the background, pipeline cache on disk (`native_pipelines.bin`),
+  textures loaded in parallel into placed heaps (area entry 76 ms -> 5.9 ms).
+- **Free camera** (F6, controller L3 + R3): the game's own debug world camera, with
+  zoom (LB / RB). **Photo mode** (F8, controller Y while the free camera is on): the world
+  stands still while the camera flies.
+- Field of view of the driving camera, 50-160 % (`fov_scale`).
+- **G-Sync / FreeSync mode** (`frame_pacing_vrr`, off by default): the frame rate stays just
+  under the refresh rate (116 fps at 120 Hz, also at Unlimited), presented with V-Sync.
+- New **Qt 6 launcher** (`launcher-windows/`) with General and Advanced tabs; the C#
+  launcher stays as the fallback when Qt is missing.
+- Even frame pacing at any target (30 / 60 / unlimited / custom) instead of the old
+  `max_fps` limiter, paced at the game's `VdSwap` (60 fps: 49.8 -> 19.1 ms from frame
+  handoff to the screen), low-latency mode, adaptive pacing, smoothing, lock to the
+  display's real refresh, one present per game frame, frame time recording (F10).
+- *Unlock everything* option (the game's `UnlockAllThings` flag, experimental).
+- English log messages, statistics every 10 s, a line for every late frame, symbolized
+  host crashes in `nfsmw_crash.log`.
+- Tools: scripted test runs with screen recording and glitch detection
+  (`tools/audiodiag/`), a sampling profiler (`tools/cpuprof`), frame replay
+  (`tools/replay`), frame time measurement (`tools/measure_frametimes.bat`,
+  `tools/analyze_frametimes.py`), the SDK patch generator and its end-to-end check
+  (`tools/generar_parche_ff.py`, `tools/dev/e2e_check.py`).
+
+### Changed
+
+- The original's Esc menu is in English now (tabs VIDEO / GAME / SYSTEM / DEBUG), can be
+  opened and used with the controller (Back + Start), so the game can be quit without a
+  keyboard, and has this fork's options.
+- V-Sync is on by default (measured: no tearing at 120 fps on a 120 Hz display, same
+  latency).
+- The launcher only offers what the native renderer uses (no video engine or graphics
+  API choice).
+- Next to the native renderer the GPU emulation no longer loads shaders, fetches its own
+  front buffer or locks a mutex per draw packet (GPU thread busy 25.7 -> 22.0 %), and it
+  only stops drawing once its swap can show the native frame (Direct3D 12 on the same
+  GPU).
+- *Restore defaults* in the Esc menu resets a fixed list (V-Sync, G-Sync / FreeSync, the
+  fields of view, the free camera, game speed, anisotropic / MSAA / mipmaps,
+  post-processing, car detail) instead of every setting, which switched the running game
+  back to the GPU emulation. Display, frame rate and content options keep the launcher's
+  values.
+- In the Esc menu, B first closes an open list (or ends editing a value), then the menu;
+  the left stick moves like the D-pad; Start alone closes on release.
+- Launcher Advanced options are greyed out where they do nothing.
+
+### Fixed
+
+- Crash before the menu with `0xC000008F` (floating-point exceptions masked).
+- *New game* crash with the Black Edition flag on (now the single byte `0x82A2CE06`).
+- Sound effects cut or garbled after driving a while (XMA output reuse).
+- Crash at start without an audio device (silent output instead).
+- Window larger than the screen at high display scaling, HUD cut off.
+- Crash when the police car loads (native renderer).
+- Sun shining through buildings (occlusion queries, GPU emulation and native renderer).
+- G-Sync tearing and V-Sync judder from presenting on every monitor refresh.
+- Texture streaming hitches on the GPU emulation path (textures in shared heaps).
+- One-frame white flashes and stripes, half-loaded textures (native renderer).
+- Only the largest mip level of every texture was loaded (distant surfaces shimmered).
+- Double images while zooming the free camera, and with a field of view other than
+  100 %, at more than 60 fps.
+- Memory growing all session from unread occlusion query segments while the native
+  renderer draws.
+
+### Not solved
+
+- Multiplayer (the network layer below the solved privilege gate).
+- The native renderer does not draw points, lines or rectangle lists; a frame whose HUD
+  vertex shader was patched for another layout is held back (about one per second with
+  sparks and skid marks).
+- Fences are still written by the emulator when it parses them, not when the native
+  renderer has drawn (covered by measured workarounds).
+- Esc menu changes to settings the launcher also has are overridden by the launcher on
+  the next start.
+
 ## [0.0.2] - 2026-09-17
 
 ### Añadido

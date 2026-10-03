@@ -8,7 +8,8 @@
 #  al .exe. La pone el usuario en build\ cuando quiera usar la carpeta.
 #
 #  El juego se copia como ${D_NOMBRE}.exe, que ahora es NFS_Most_Wanted.exe.
-#  Despues CONSTRUIR_LANZADOR.bat lo renombra a nfsmw.exe y deja el lanzador
+#  Despues launcher-windows\build.bat (o CONSTRUIR_LANZADOR.bat, el lanzador C#)
+#  lo renombra a nfsmw.exe y deja el lanzador
 #  con el nombre del juego, que es como se ve la carpeta terminada.
 # =============================================================================
 

@@ -3,6 +3,84 @@
 Cómo encajan las piezas, y sobre todo **dónde vive cada cosa**, que es lo que más
 cuesta entender al llegar al proyecto.
 
+## This fork (2026-10-03)
+
+The three layers below are still the same files, but each holds more than the Spanish
+text says. Outdated below: "almost no fix is in this repository" and "the app is
+surprisingly small" (`app/`), the launcher (`tools/lanzador/`), the two resolutions
+(there are three), the EDRAM section (idle while the native renderer draws) and the
+game speed bar of the launcher (no launcher has one; game speed is set in the Esc
+menu).
+
+```
+   nfsmw.exe          generated game code + app/src: native renderer, free camera,
+                      car LOD, post-processing switch, Esc menu, crash log,
+                      render capture / census
+      │  links against              ▲  functions nfsmw.exe exports (NfsmwNativeFrame,
+      ▼                             │  NfsmwNativeFrameShown, NfsmwNativeSkipEmulation,
+   rexruntime.dll     patched SDK   │  NfsmwInputFilter), looked up by the patched SDK
+      │  LoadLibrary                │
+      ▼                             │
+   rexgpu-xenos.dll   patched GPU emulation; still reads the whole command stream
+```
+
+**`nfsmw.exe` now carries a lot of the fork's own work.** `app/src` has grown to about
+9,700 lines:
+
+| File | What it is |
+|---|---|
+| `src/native/` | The native Direct3D 12 renderer: records the game's D3D library calls on the game thread, draws them on its own thread with real render targets, and its picture is shown through the emulator's `IssueSwap`. Compiles the SDK's Xenos shader translator sources from `..\rexglue-sdk` into the executable. Cvar `native_renderer`, off by default; the Qt launcher always turns it on. It takes over only once the swap can open its frame (Direct3D 12, same GPU); otherwise the emulation keeps drawing. See [NATIVE_RENDERER.md](NATIVE_RENDERER.md) |
+| `src/freecam.cpp` | Free camera (F6), photo mode (F8), `fov_scale`, `freecam_fov`. Takes the controller input through `NfsmwInputFilter`. See [FREECAM.md](FREECAM.md) |
+| `src/car_lod.cpp` | `car_lod_highest`: cars at their highest level of detail at any distance |
+| `src/post_processing.cpp` | `post_processing`: switch for the game's post-processing pass ("visual treatment") |
+| `src/nfsmw_menu.cpp` | The in-game settings menu on Esc (tabs VIDEO / GAME / SYSTEM / DEBUG), including Black Edition and Unlock everything |
+| `src/crash_log.cpp` | `nfsmw_crash.log` with the exception and a symbolized stack on host crashes |
+| `src/render_capture.cpp`, `src/render_census.cpp` | Debug: one frame's D3D calls written to a file (`render_capture_frame`), and call counts (`render_census`); used with `tools/renderprobe` and `tools/replay` |
+| `src/nfsmw_app.h` | Still the `ReXApp` subclass described below, now also with the F6, F8 and F10 keys (the Esc key for the menu was already there upstream) |
+
+**The fixes live in two DLLs, not one.** The fork's SDK changes (`parche_ff.py`) go into
+`rexruntime.dll` and into `rexgpu-xenos.dll` (frame pacing, the command processor, the
+SDK side of the native renderer). After changing that patch both DLLs are copied, and
+the game is rebuilt too, because `fpscr.h` is inline in the generated code. See
+[parches.md](parches.md).
+
+**Launchers.** The main launcher is the Qt one in `launcher-windows/` (built by
+`launcher-windows\build.bat`, and by `CONSTRUIR.bat` first). The C# launcher in
+`tools/lanzador/` is the fallback when Qt is not available. `launcher-linux/` holds a
+Qt launcher for Linux, built by `app/CMakeLists.txt` on Linux when Qt 6.4+ is found and
+used by `packaging/appimage/`. See [lanzador.md](lanzador.md).
+
+**New tool folders.** `tools/audiodiag` (scripted runs, sound analysis),
+`tools/cpuprof` (sampling profiler), `tools/replay` (replays a captured frame without
+the game), `tools/renderprobe` (analysis of the game's D3D layer and of captures),
+`tools/dev` (build and check helpers, see [compilar.md](compilar.md)) and
+`tools/sdk_nuevos` (new SDK files that `parche_ff.py` copies), plus
+`tools/generar_parche_ff.py`, `tools/measure_frametimes.bat` and
+`tools/analyze_frametimes.py`.
+
+**Three resolution settings.** Besides `--resolution` and `--resolution_scale`
+(section "Dos resoluciones" below) there is `native_renderer_scale` (1-4): the native
+renderer draws at that multiple of 1280x720 (supersampling). `resolution_scale` only
+affects the emulation's render targets and EDRAM, which do not draw while the native
+renderer runs; the Qt launcher always passes `resolution_scale=1` and puts its
+"Render scale (AA)" (1x-4x, default 2x) into `native_renderer_scale`.
+
+**EDRAM idle with the native renderer.** While the native renderer draws, the
+emulation still reads the whole command stream (registers, fences, waits, interrupts,
+swaps) but skips draws and resolves, so its EDRAM / render target cache is idle and the
+ROV / RTV choice below does not matter. It matters only when the emulation draws:
+`nfsmw.exe` started directly or through the C# launcher (`native_renderer` defaults to
+false), or when the swap cannot open the native frame.
+
+**Game speed.** `game_speed` (`parche_velocidad.py`) is set in the Esc menu (GAME tab,
+20-200 %); neither launcher has a game speed control, so the launcher bar mentioned in
+the section on the guest clock does not exist in this fork. The 0.1 % floor described
+there still applies to the cvar.
+
+**Settings priority.** The Esc menu saves to `nfsmw.toml`, but the Qt launcher passes
+all its values as `--name=value` on every start, so they win (see the cvar section
+below). It always passes `gpu_backend=d3d12`.
+
 ## Las tres capas
 
 ```

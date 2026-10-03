@@ -3,6 +3,63 @@
   Carpeta portable
 ================================================================================
 
+THIS FORK (2026-10-03) - IN ENGLISH
+-----------------------------------
+This folder is built from frankyfife's fork, NFSMW-Recompiled_ff. Parts of
+the Spanish text below are outdated, above all the description of the
+launcher and its "motor de video" and "API grafica" options: those are gone
+from NFS_Most_Wanted.exe (only the old LANZADOR.bat window still has them).
+This block has the current facts.
+
+THE LAUNCHER (NFS_Most_Wanted.exe)
+  A Qt program with two tabs:
+    General   Game data (ISO or extracted folder), Display (resolution,
+              render scale 1x-4x, fullscreen or window, monitor), Game
+              (language, Black Edition, unlock everything, field of view),
+              Effects & detail, Frame rate (30 / 60 / Unlimited / Custom,
+              V-Sync, G-Sync / FreeSync), Image quality (anisotropic
+              filtering, MSAA, output filter, sharpness).
+    Advanced  Latency & frame pacing, Diagnostics.
+  It always starts the game with the native Direct3D 12 renderer. Its
+  settings are kept in launcher.ini, the game's log of the last run in
+  logs\launcher.log. The game runs at high priority, and the launcher is
+  minimized while it runs.
+
+  The ISO: put it into this folder or pick it with the button. If the Game
+  data field is empty, the launcher takes an extracted game_root\ folder from
+  here, else the first .iso here (by name). On the first PLAY it extracts the
+  ISO once (about 7 GB) into game_root_cache\<ISO name>; later starts use
+  that copy. An extracted folder (with default.xex) works too.
+
+  nfsmw.exe started directly, without the launcher, uses the GPU emulation
+  instead, unless nfsmw.toml sets native_renderer = true. It does once a
+  setting has been changed in the Esc menu of a game started from the
+  launcher: that save writes every value that differs from its default into
+  nfsmw.toml, the launcher's arguments included. LANZADOR.bat, the
+  old PowerShell window described below, keeps its own settings
+  (lanzador.json) and does not share them with this launcher.
+
+IN THE GAME
+  Esc              settings menu (VIDEO / GAME / SYSTEM / DEBUG)
+                   controller: Back + Start
+  F6               free camera
+                   controller: L3 + R3 (both sticks pressed in)
+  F8               photo mode: the world stands still (turns the free
+                   camera on); controller: Y while the free camera is on
+  F10              frame time recording (CSV files in logs\frametimes;
+                   only when started from the launcher, which sets that
+                   folder)
+  F3               SDK debug overlay (fps and frame time)
+  F4               SDK settings overlay
+  key left of 1    SDK console. That is the US layout; the bind is the
+                   key Windows calls VK_OEM_3, which on a Spanish layout
+                   is the N with tilde key, not the one left of 1
+
+  Settings changed in the Esc menu are saved to nfsmw.toml, but the launcher
+  passes its own values on every start, so they win: change those in the
+  launcher.
+
+
 COMO SE USA
 -----------
   1. Copia tu ISO en esta misma carpeta.

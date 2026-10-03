@@ -2,6 +2,63 @@
 
 De un clon limpio a una carpeta jugable.
 
+## This fork (2026-10-03)
+
+The steps below still work, but these parts are outdated in this fork:
+
+- **Requirements: Qt 6 for MSVC 2022 x64 (optional).** Only for the Qt launcher in
+  `launcher-windows/`. `launcher-windows\build.bat` uses `QT_DIR`, or else looks for
+  `D:\Qt\6.*\msvc2022_64` and `C:\Qt\6.*\msvc2022_64`; its header shows how to install
+  it with `aqtinstall`. Without Qt the build still finishes, with the C# launcher.
+- **Where the SDK has to be.** `app/CMakeLists.txt` looks for the SDK source only in
+  `..\rexglue-sdk` (cache variable `REXSDK_SOURCE_DIR`). The `.\sdk` fallback mentioned
+  below is only for the patch scripts. Without the SDK source there (or on a non-Windows
+  build) the game is built with `src/native/parallel_stub.cpp`: CMake prints
+  `Native renderer: off` and the native renderer does nothing.
+- **Ten patches, not nine** (phase 1). `CONSTRUIR.bat` applies, in this order:
+  `parche_diagnostico`, `parche_anillo`, `parche_desatasco`, `parche_presentador`,
+  `parche_gpu_fallback`, `parche_restaurar`, `parche_velocidad`, `parche_backend`,
+  `parche_privilegios` and, last, `parche_ff`, the fork's own (see
+  [parches.md](parches.md)). The fixes end up in `rexruntime.dll` **and**
+  `rexgpu-xenos.dll` (phase 2), and `parche_ff.py` also changes a header the game
+  includes inline.
+- **The launcher step** (phase 4) first runs `launcher-windows\build.bat /silencioso`
+  (Qt launcher, plus its Qt DLLs through `windeployqt`). If that fails, because Qt is
+  not found or the build fails, it falls back to `CONSTRUIR_LANZADOR.bat`, the C#
+  launcher in `tools/lanzador`. Either one becomes `build\NFS_Most_Wanted.exe` and the
+  game is renamed to `nfsmw.exe`.
+- **Building only the launcher.** `launcher-windows\build.bat` builds the Qt launcher;
+  `CONSTRUIR_LANZADOR.bat` (section "Compilar solo el lanzador") is the C# one.
+- **Playing.** In the Qt launcher the game data (ISO or extracted folder) is chosen in
+  the General tab; an ISO is extracted once (about 7 GB) into
+  `build\game_root_cache\<name>`. See [lanzador.md](lanzador.md).
+- **`build\nfsmw.toml`.** The Esc menu saves its settings there as well, but the Qt
+  launcher passes its own values on every start, so they win.
+- **Rebuilding after changing `parche_ff.py`.** The advice at the end (rebuild only the
+  SDK and copy only `rexruntime.dll`) is wrong for it. After applying it:
+  rebuild and install the SDK, rebuild the game (`fpscr.h` is inline in the generated
+  code), and copy `rexruntime.dll` **and** `rexgpu-xenos.dll` into `build\`, along with
+  the rebuilt `nfsmw.exe`. `CONSTRUIR.bat` does all of this.
+
+### Developer scripts in `tools/dev`
+
+Small helpers used while working on the fork. Their paths are fixed to
+`D:\NFSMW\NFSMW-Recompiled_ff` and `D:\NFSMW\rexglue-sdk`. `profbuild.bat`,
+`replaybuild.bat` and `buildsampler.bat` write their logs and outputs to
+`%TEMP%\claude` (the sampler as `%TEMP%\claude\sampler.exe`); `sdkbuild.bat`,
+`gamebuild.bat` and `e2e_check.py` print to the console, and `menutest.ps1` logs to
+`%TEMP%\nfsmw_menu_<name>.log`.
+
+| Script | What it does |
+|---|---|
+| `sdkbuild.bat` | Builds and installs the SDK (`out/build/win-amd64`, Release, target `install`). Its second step runs `cmake --build --preset win-amd64-release` from the repository root, where there is no `CMakePresets.json` (only `app\` has one), so that step does not build the game: use `gamebuild.bat` for that |
+| `gamebuild.bat` | Builds the game in `app\` with the `win-amd64-release` preset |
+| `profbuild.bat` | Separate SDK build with debug info (`out/build/win-amd64-prof`, `rexgpu-xenos` and `rexruntime`), for the sampling profiler |
+| `buildsampler.bat` | Builds the sampling profiler, `tools/cpuprof/sampler.cpp` |
+| `replaybuild.bat` | Builds `tools/replay` (`nfsmw_replay.exe`) against the installed SDK |
+| `e2e_check.py` | Checks `parche_ff.py`: must print `clean rebuild matches working SDK: True` |
+| `menutest.ps1` | Starts `build\nfsmw.exe`, skips the intro movies with Enter and logs frame pacing in the menu |
+
 ## Lo que hace falta
 
 | Cosa | Por qué |
@@ -159,7 +216,9 @@ falta instalar nada. Ver [lanzador.md](lanzador.md).
 
 ## Recompilar tras tocar un parche
 
-No hace falta rehacer el juego: los parches solo tocan el SDK.
+~~No hace falta rehacer el juego: los parches solo tocan el SDK.~~ *(Fork: wrong for
+`parche_ff.py`, which needs the SDK and the game rebuilt and both `rexruntime.dll` and
+`rexgpu-xenos.dll` copied; see "This fork" at the top.)*
 
 ```bat
 python tools\parche_loquesea.py
