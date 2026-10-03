@@ -798,11 +798,11 @@ the swap. The table shows the state after step 1.
 | Fences (`EVENT_WRITE_SHD`, `MEM_WRITE`, scratch register writeback) and the ring's read pointer | written as soon as the emulator *parses* the packet | yes | the one that matters, see below |
 | `WAIT_REG_MEM` | polls memory or a register | yes | stays |
 | `INTERRUPT` | the guest's interrupt callback | yes | stays |
-| `EVENT_WRITE_ZPD` | only `VGT_EVENT_INITIATOR`; the native renderer writes the reports | yes | native (done) |
+| `EVENT_WRITE_ZPD` | only `VGT_EVENT_INITIATOR`; the native renderer writes the reports. Until 2026-10-03 the host query of the last emulated interval was reopened at every submission (every swap) and its segments piled up unread, one per swap; now the chain stops at the takeover | yes | native (done) |
 | `EVENT_WRITE_EXT` | fixed full-screen extents | probably not | stays (cheap) |
 | `XE_SWAP` → `IssueSwap` | up to 50 ms waiting for the native frame, its fence on the queue, gamma ramp pass (+ FXAA) into the presenter's output; `RequestSwapTexture` for the emulated front buffer only without a native frame. Before step 1 it ran at every swap, before the native frame was asked for (texture cache lookup, loaded from guest memory if it changed) | the swap yes, the emulated front buffer no | `RequestSwapTexture` only without a native frame (step 1, done). A swap chain on the native device would save one full-size pass but duplicate the presenter (UI, F10 recording, pacing): not worth it |
 | Small resolves (≤ 64 KB, exposure) | written into guest memory by the native renderer once its GPU finished the frame | yes | native (done) |
-| Shared memory, texture cache, EDRAM / render target cache, primitive processor | idle: no draw requests anything. Textures and watched pages from before the native renderer took over stay until evicted or written | no | could be released after the takeover (video memory), low priority |
+| Shared memory, texture cache, EDRAM / render target cache, primitive processor | idle apart from the submission and frame `IssueSwap` still opens and closes (`BeginSubmission`, `BeginFrame`, `EndFrame`): no draw requests anything. Textures and watched pages from before the native renderer took over stay until evicted or written | no | could be released after the takeover (video memory), low priority |
 
 **Fences, the one that matters.** The D3D library learns from fences and from
 the ring's read pointer when the GPU is done with memory: command ring space
@@ -850,14 +850,14 @@ missing.
 1. Cheap, without effect on the picture: the atomic flag instead of the
    lock per draw packet; while the native renderer delivers, no
    `RequestSwapTexture` and no shader loads on the GPU thread. Measure the
-   GPU thread with `tools/cpuprof` before and after. **Done, not measured
-   yet** (below). The constants' bookkeeping stays (see the table).
+   GPU thread with `tools/cpuprof` before and after. **Done and measured**
+   (below). The constants' bookkeeping stays (see the table).
 2. Diagnostics for the fences (which, how many, who waits and how long).
 3. Native fences and read pointer with the time-out fallback; then try
    `native_renderer_copy_draw_data` and `native_renderer_bound_lead` off.
 4. Only then option A.
 
-**Step 1 (2026-10-02, not measured yet).** `NfsmwNativeSkipEmulation`
+**Step 1 (2026-10-02, measured on Windows 2026-10-03).** `NfsmwNativeSkipEmulation`
 reads an atomic flag the renderer sets with its first shared frame instead
 of locking its mutex. The command processor asks it at every draw packet,
 `IM_LOAD` and `IM_LOAD_IMMEDIATE` (`NativeRendererDraws`), the D3D12 one at
@@ -882,6 +882,38 @@ too, but the window keeps showing the native picture.) An SDK with the
 previous `parche_ff.py` applied needs `python tools\parche_ff.py --revertir`
 with that previous version before updating; the new one refuses to apply
 over it and changes nothing.
+
+Measured on Windows (2026-10-03, RTX 5090, 2160p, render scale 2, uncapped,
+driving in circles in free roam, `tools/cpuprof` 10 s on "GPU Commands"):
+
+| | GPU thread busy (not in a wait) | `rexgpu-xenos` | `MSVCP140` (mutex) | game fps |
+|---|---|---|---|---|
+| before step 1 | 25.7 % | 17.0 % | 0.35 % | 316 |
+| after step 1 | 22.0 % | 14.6 % | 0.02 % | 298-326 |
+
+The game thread still sets the frame rate (the main thread is 94 % in the
+game's code either way), so the gain shows on the GPU thread only: about a
+seventh less work, the mutex gone. Picture: a recorded drive had no one-frame
+glitches. The switch back, with the SDK console (`:native_renderer false` in
+`tools/audiodiag/autonav.ps1`, the key left of 1): the emulation draws again
+(its texture cache loads 383 textures within the next 10 s), its picture
+against the native one at the same spot: mean difference 0.56 of 255, no
+pixel over 40; switching on again shows the native picture.
+
+The review of step 1 found three older weak points, fixed with it:
+
+- The host occlusion query chain (row `EVENT_WRITE_ZPD` above) stops when the
+  native renderer takes over, both at the skipped ZPD event and in
+  `BeginSubmission`.
+- The emulation only stops drawing once `IssueSwap` could open the native
+  frame on its own device (`NfsmwNativeFrameShown`). With the emulator on
+  another adapter (`d3d12_adapter`) or the Vulkan backend the frame cannot be
+  opened; before, the emulated draws were skipped anyway and the window kept
+  the last emulated frame for the whole session. Now it is logged once and
+  the emulation goes on drawing.
+- Turning `native_renderer` off while playing clears the shared frame
+  (`InvalidateShared`), so turning it on again shows the emulation until the
+  renderer shared a new frame, not the one from before the switch.
 
 ## Options
 

@@ -7,6 +7,8 @@
 # first key on. Held together: <keys joined by +>*<seconds>, e.g. G+d*2
 # (gas and steer right); d / a = D / A key held (steer right / left); f / k =
 # F / K held (L3 / R3 with mnk_mode, f+k*1 is the free camera chord).
+# :<command> = a line typed into the SDK console (e.g. :native_renderer false);
+# ;<text> = text typed only; #<hex> / !<hex> = a key by scan code / virtual key.
 # s = S key held (count = seconds), F10 = frame time recording, I = Back + Start, O / A = D-pad down / up,
 # G(as held, count = seconds; V/T/Y/N/Q/Z hold W/arrow up/D/arrow right/1/3), F = F6 (free camera), C = F8 (photo mode).
 Add-Type -AssemblyName System.Drawing
@@ -38,6 +40,32 @@ public static class G4 {
     return found;
   }
   public struct RECT { public int L, T, R, B; }
+  // Keys by scan code and text as Unicode characters (SendInput): the same on
+  // every keyboard layout (the console key is the one left of 1).
+  [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Explicit)] struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
+  [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public INPUTUNION u; }
+  [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+  static void Send(ushort scan, uint flags) {
+    var i = new INPUT { type = 1 };
+    i.u.ki.wScan = scan;
+    i.u.ki.dwFlags = flags;
+    SendInput(1, new[] { i }, Marshal.SizeOf(typeof(INPUT)));
+  }
+  public static void ScanKey(ushort scan, bool extended = false) {
+    uint e = extended ? 1u : 0u;  // KEYEVENTF_EXTENDEDKEY
+    Send(scan, 8 | e);  // KEYEVENTF_SCANCODE
+    System.Threading.Thread.Sleep(60);
+    Send(scan, 8 | 2 | e);
+  }
+  public static void TypeText(string text) {
+    foreach (char c in text) {
+      Send(c, 4);  // KEYEVENTF_UNICODE
+      Send(c, 4 | 2);
+      System.Threading.Thread.Sleep(20);
+    }
+  }
 }
 "@
 # Per-monitor aware: window rectangles and the screen copy in physical pixels
@@ -97,6 +125,43 @@ if ($Record) {
 $holdKeys = @{ 'BACK' = 0x53; 'G' = 0x4F; 'V' = 0x57; 'T' = 0x26; 'Y' = 0x44; 'N' = 0x27;
                'Q' = 0x31; 'Z' = 0x33; 'd' = 0x44; 'a' = 0x41; 'f' = 0x46; 'k' = 0x4B }
 foreach ($step in $Keys.Split(',')) {
+  if ($step -match '^([#!])([0-9A-Fa-f]{2})$') {
+    # #<hex> = a key by scan code, !<hex> = by virtual key code.
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    $code = [Convert]::ToUInt16($Matches[2], 16)
+    if ($Matches[1] -eq '#') {
+      [G4]::ScanKey($code)
+    } else {
+      [G4]::keybd_event([byte]$code, [byte][G4]::MapVirtualKey([uint32]$code, 0), 0, [UIntPtr]::Zero)
+      Start-Sleep -Milliseconds 60
+      [G4]::keybd_event([byte]$code, [byte][G4]::MapVirtualKey([uint32]$code, 0), 2, [UIntPtr]::Zero)
+    }
+    Start-Sleep -Milliseconds 700
+    continue
+  }
+  if ($step.StartsWith(';')) {
+    # ;<text> = only typed (as Unicode characters), e.g. into an open console.
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [G4]::TypeText($step.Substring(1)); Start-Sleep -Milliseconds 300
+    continue
+  }
+  if ($step.StartsWith(':')) {
+    # :<command> = a line in the SDK console (opened and closed with the key
+    # left of 1), e.g. ":native_renderer false". Backspaces first: the console
+    # key is a dead key on some layouts.
+    [G4]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [G4]::ScanKey(0x29); Start-Sleep -Milliseconds 500
+    [G4]::ScanKey(0x0E); [G4]::ScanKey(0x0E); Start-Sleep -Milliseconds 100
+    [G4]::TypeText($step.Substring(1)); Start-Sleep -Milliseconds 200
+    # The keypad's Enter (the game still sees an Enter as Start with
+    # mnk_mode and pauses in free roam: follow with E to resume).
+    [G4]::ScanKey(0x1C, $true); Start-Sleep -Milliseconds 500
+    [G4]::ScanKey(0x29); Start-Sleep -Milliseconds 500
+    continue
+  }
   $mm = [regex]::Match($step.Trim(), '^([A-Za-z](?:\+[A-Za-z])+)\*(\d+)$')
   if ($mm.Success) {
     # Several keys held together for n seconds.

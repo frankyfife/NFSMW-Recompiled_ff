@@ -1355,11 +1355,27 @@ struct NfsmwNativeFrameInfo {
   uint64_t fence_value;
   uint32_t width, height;
 };
+// Set by the emulator's IssueSwap: whether it could open the shared frame on
+// its device (the same adapter, D3D12). Until then the emulation keeps drawing
+// (with another adapter or the Vulkan backend the window would freeze).
+namespace {
+std::atomic<bool> g_native_frame_shown{false};
+}  // namespace
+extern "C" __declspec(dllexport) void NfsmwNativeFrameShown(bool shown) {
+  g_native_frame_shown.store(shown, std::memory_order_release);
+}
+
 extern "C" __declspec(dllexport) bool NfsmwNativeFrame(NfsmwNativeFrameInfo* info) {
+  replay::Renderer* renderer = Parallel::Get().renderer_.load();
   if (!REXCVAR_GET(native_renderer)) {
+    // Switched off while playing: the shared frame is from before, and the
+    // emulation draws again until a new one is shown.
+    if (renderer && renderer->HasSharedFrame()) {
+      renderer->InvalidateShared();
+    }
+    g_native_frame_shown.store(false, std::memory_order_release);
     return false;
   }
-  replay::Renderer* renderer = Parallel::Get().renderer_.load();
   if (!renderer) {
     return false;
   }
@@ -1402,7 +1418,8 @@ extern "C" __declspec(dllexport) bool NfsmwNativeSkipEmulation() {
     return false;
   }
   replay::Renderer* renderer = Parallel::Get().renderer_.load();
-  return renderer && renderer->HasSharedFrame();
+  return renderer && renderer->HasSharedFrame() &&
+         g_native_frame_shown.load(std::memory_order_acquire);
 }
 
 // The D3D library's occlusion query event (query type 9, sub_8258F810):

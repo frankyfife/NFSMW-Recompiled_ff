@@ -198,6 +198,13 @@ class Renderer {
   // Thread-safe and without the lock: whether a frame was shared yet (the
   // emulator asks at every draw packet and shader load).
   bool HasSharedFrame() const { return shared_frame_ready_.load(std::memory_order_acquire); }
+  // The native renderer was switched off: no frame to show until the next
+  // PresentToShared (the one there is from before the switch).
+  void InvalidateShared() {
+    std::lock_guard<std::mutex> lock(shared_mutex_);
+    shared_latest_value_ = 0;
+    shared_frame_ready_.store(false, std::memory_order_release);
+  }
   // Resolves of this frame up to max_bytes go into guest memory the way the
   // GPU would write them (when the emulation no longer draws, the CPU still
   // reads some, like the brightness for the exposure). Returns how many.
