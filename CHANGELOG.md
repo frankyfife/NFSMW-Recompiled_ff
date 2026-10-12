@@ -2,6 +2,36 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [ff fork] - 2026-10-12: fixes from the NFS Carbon recompilation
+
+Taken over from [nfs-carbon-recomp](https://github.com/frankyfife/nfs-carbon-recomp_ff)
+(same engine, same SDK). **Not tested in this game yet**: built into `parche_ff.py` and
+compiled, but not played. Each change that alters behaviour has a setting to turn it off.
+
+### Added
+
+- `tools/direct_calls.py` (opt-in, `set NFSMW_DIRECT_CALLS=1` before `CONSTRUIR.bat`):
+  calls between game functions nobody hooks go to `__imp__sub_X` instead of the weak
+  `sub_X` alias, so the compiler can inline them. Calls to functions hooked later are put
+  back. A separate implementation of the Carbon port's script.
+- `NFSMW_THINLTO` CMake option (off): ThinLTO over the game code with lld, so those
+  calls can also be inlined across files.
+
+### Fixed
+
+- XMA decoder: Xenia Canary's fixes to the decoder this SDK's is derived from
+  (`xma_canary_fixes`, on). A context starved on input sets its write offset back to the
+  read offset (the stall signal NFS Most Wanted waits for, which `parche_desatasco.py`
+  forced after 250 ms); a frame is drained before the work loop ends; the buffer is only
+  reported full when it is; the packet walk follows a sub-stream's skip chain; a frame
+  whose header crosses a packet boundary is no longer stepped over.
+- Guest interrupt callbacks no longer run holding the global lock
+  (`interrupt_global_lock = false`); audio callbacks, write-watch faults and kernel
+  objects no longer wait for the vblank handler.
+- Settings from the command line or `nfsmw.toml` are kept when the `gpu_backend` fallback
+  loads the GPU plugin a second time.
+- Write-watch faults no longer parse `/proc/self/maps` (Linux builds).
+
 ## [ff fork] - 2026-09-29 to 2026-10-03
 
 Changes of the [frankyfife fork](https://github.com/frankyfife/NFSMW-Recompiled_ff) on top

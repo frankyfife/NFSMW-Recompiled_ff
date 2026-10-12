@@ -53,6 +53,10 @@ FICHEROS = [
     "src/audio/xma_context.cpp",
     "include/rex/audio/xma/context.h",
     "src/kernel/xam/xam_input.cpp",
+    "include/rex/system/function_dispatcher.h",
+    "src/system/function_dispatcher.cpp",
+    "src/core/cvar.cpp",
+    "src/system/mmio_handler.cpp",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 

@@ -26,7 +26,7 @@ outdated:
 
 ### `parche_ff.py`: the fork's SDK changes
 
-By far the largest patch (about 166 KB: 126 text blocks in 23 SDK files, plus one new
+By far the largest patch (about 180 KB: 140 text blocks in 27 SDK files, plus one new
 file, `include/rex/graphics/frame_pacer.h`, copied from `tools/sdk_nuevos/`). Its header
 lists every change with the reason and the measurements. In short: floating-point
 exceptions always masked (without it the game dies with 0xC000008F before the menu);
@@ -41,6 +41,13 @@ writes, `readback_resolve_max_kb`); controller input passed through the free cam
 (`NfsmwInputFilter`, exported by `nfsmw.exe`); the XMA fix for cut sound effects; running
 without an audio device; a window larger than the screen; and diagnostics
 (`log_guest_fps`, `gpu_capture_frame`, `audio_dump_file`).
+
+Since 2026-10-12 it also carries four changes taken over from the NFS Carbon
+recompilation (same engine, same SDK), none of them tested in this game yet, each with a
+setting to switch it back where it changes behaviour: Xenia Canary's XMA decoder fixes
+(`xma_canary_fixes`, see `parche_desatasco.py` below), interrupts without the global lock
+(`interrupt_global_lock`), cvar values kept when the GPU plugin is loaded a second time
+(the `gpu_backend` fallback), and cheaper write-watch faults on Linux.
 
 How it is maintained:
 
@@ -96,6 +103,15 @@ de audio en esa voz. La historia completa —y por qué el arreglo "obvio" era e
 equivocado— está en [diario/audio-cuelgue.md](diario/audio-cuelgue.md).
 
 **Comprobado:** el usuario jugó la zona que lo reproducía sin que se colgara.
+
+> **2026-10-12 (English):** the cure this section asked for exists now. Xenia Canary
+> changed its decoder (commit 09dbe2cd3) so that a context starved on input gets its
+> output write offset set back to the read offset and its buffer invalidated, with the
+> comment that NFS Carbon and NFS Most Wanted use the write offset as a stall detector:
+> exactly the signal this patch gives after 250 ms. `parche_ff.py` ports it with the
+> other Canary XMA fixes (`xma_canary_fixes`, on by default). This patch stays as the
+> safety net; if its `[desatasco]` warning no longer appears with the fixes on (and does
+> with `xma_canary_fixes = false`), it can go.
 
 ### `parche_anillo.py` — instrumentación del XMA
 

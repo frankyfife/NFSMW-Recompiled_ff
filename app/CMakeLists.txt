@@ -100,6 +100,35 @@ endif()
 # --gpu_plugin ya no hace falta; se puede seguir pasando para cambiarlo.
 rexglue_setup_target(nfsmw GPU_PLUGINS xenos)
 
+# ThinLTO over the game code and the app (off by default, not measured on this
+# game yet). With tools/direct_calls.py applied (CONSTRUIR.bat with
+# NFSMW_DIRECT_CALLS=1), calls between unhooked game functions go to
+# __imp__sub_X and can then be inlined across the 131 generated files, not only
+# within one. The NFS Carbon recompilation builds its Android library this way.
+# Needs lld (lld-link.exe on Windows, part of the LLVM install), Clang and a
+# Release build; the first link takes long, later ones reuse thinlto-cache.
+#     cmake --preset win-amd64-release -DNFSMW_THINLTO=ON
+option(NFSMW_THINLTO "ThinLTO over the game code and the app (Clang + lld, Release)" OFF)
+if(NFSMW_THINLTO AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    foreach(target nfsmw nfsmw_recomp)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE -flto=thin)
+        endif()
+    endforeach()
+    set(NFSMW_THINLTO_CACHE "${CMAKE_BINARY_DIR}/thinlto-cache")
+    target_link_options(nfsmw PRIVATE -flto=thin -fuse-ld=lld)
+    if(WIN32)
+        target_link_options(nfsmw PRIVATE "LINKER:/opt:lldltojobs=all"
+                            "LINKER:/lldltocache:${NFSMW_THINLTO_CACHE}")
+    else()
+        target_link_options(nfsmw PRIVATE "LINKER:--thinlto-jobs=all"
+                            "LINKER:--thinlto-cache-dir=${NFSMW_THINLTO_CACHE}")
+    endif()
+    message(STATUS "ThinLTO: on")
+elseif(NFSMW_THINLTO)
+    message(WARNING "NFSMW_THINLTO needs Clang and CMAKE_BUILD_TYPE=Release; left off")
+endif()
+
 # Native Qt launcher (Linux). Used by packaging/appimage/.
 option(NFSMW_BUILD_LAUNCHER "Build the native Qt launcher" ON)
 option(NFSMW_LAUNCHER_BUILD_TESTS "Build Qt launcher tests" OFF)

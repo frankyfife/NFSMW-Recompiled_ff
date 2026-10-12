@@ -260,6 +260,48 @@ src/audio/sdl/sdl_audio_driver.cpp
     device: running without sound output" en el log y el hilo de audio del
     juego recibe sus callbacks (1697 en 10 s).
 
+src/audio/xma_context.cpp
+    FROM THE NFS CARBON RECOMPILATION (untested in this game so far):
+    xma_canary_fixes (true): the XMA decoder fixes Xenia Canary made to
+    XmaContextNew, which this SDK's decoder is derived from (09dbe2cd3,
+    505697f98, 7e98ae6de, 6bef1fbed, 7015473a7, aee0871dd). The first one
+    names this game: starved on input, the output write offset goes back to
+    the read offset and the buffer is invalidated, because NFS Most Wanted
+    and Carbon use the write offset as a stall detector. That is what
+    parche_desatasco.py forces from outside after 250 ms, so with these on
+    its warning should not appear any more (it stays as the safety net).
+    One difference from Canary, on purpose: a starved pass whose offsets are
+    already equal still invalidates the buffer, as this SDK always did
+    (Canary leaves it valid); the silent-buffer note above says this game
+    needs that when it kicks a reused context before giving it input.
+    Also: a frame is drained completely before the work loop ends, the
+    buffer is only reported full when the ring is full, the packet walk
+    follows a sub-stream's own skip chain, and a frame whose header crosses
+    a packet boundary is counted instead of stepped over. false = the
+    decoder as it was, for A/B.
+
+include/rex/system/function_dispatcher.h
+src/system/function_dispatcher.cpp
+    FROM THE NFS CARBON RECOMPILATION (untested here): interrupt_global_lock
+    (false). Guest interrupt callbacks (vblank, PM4_INTERRUPT) are
+    serialized among themselves but no longer run holding the global lock,
+    which made the audio callbacks ([audio] "waits on the global lock"),
+    write-watch faults and kernel object refcounts wait for them. What the
+    callback reaches that needs the lock takes it itself. true = as before.
+
+src/core/cvar.cpp
+    FROM THE NFS CARBON RECOMPILATION: a cvar value from the command line or
+    the config goes back to the pending values when its plugin unloads. The
+    gpu_backend fallback (parche_backend.py) loads the GPU plugin twice; the
+    first, failed load unloaded it, and its settings came back at their
+    defaults on the second.
+
+src/system/mmio_handler.cpp
+    FROM THE NFS CARBON RECOMPILATION: on a write fault the write-watch
+    callback runs first and the race check (QueryProtect) only for faults it
+    does not recognize. On Linux QueryProtect parses /proc/self/maps per
+    fault; on Windows it is a VirtualQuery and this changes little.
+
 Este fichero lo genera tools/generar_parche_ff.py: la linea base es el SDK
 de git con los demas parche_*.py aplicados en el orden de CONSTRUIR.bat.
 """
@@ -756,12 +798,40 @@ BLOQUES = [
      '  int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));\n  // PARCHE LOCAL - a window larger than the screen: 1920x1080 logical at\n  // 225 % is 4320x2430 pixels on a 3840x2160 display, centered, so its edges\n  // (and the game\'s HUD) were cut off. Fit it into the usable area (with room\n  // for the frame), keeping the aspect ratio.\n  {\n    SDL_DisplayID display = SDL_GetPrimaryDisplay();\n    if (int32_t monitor_index = REXCVAR_GET(monitor); monitor_index > 0) {\n      int display_count = 0;\n      if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count)) {\n        if (monitor_index <= display_count) {\n          display = displays[monitor_index - 1];\n        }\n        SDL_free(displays);\n      }\n    }\n    SDL_Rect usable = {};\n    if (display && SDL_GetDisplayUsableBounds(display, &usable) && usable.w > 0 &&\n        usable.h > 0) {\n      const int max_width = usable.w * 9 / 10;\n      const int max_height = usable.h * 9 / 10;\n      if (initial_width > max_width || initial_height > max_height) {\n        const double scale = std::min(double(max_width) / double(initial_width),\n                                      double(max_height) / double(initial_height));\n        REXLOG_INFO("Window: {}x{} does not fit the display ({}x{} usable), opening at {}x{}",\n                    initial_width, initial_height, usable.w, usable.h,\n                    int(initial_width * scale), int(initial_height * scale));\n        initial_width = int(initial_width * scale);\n        initial_height = int(initial_height * scale);\n      }\n    }\n  }\n#endif\n'),
     ('src/audio/xma_context.cpp',
      'audio/xma_context.cpp #1',
-     '\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n',
-     "\n  // PARCHE LOCAL - a new stream starts on a silent output buffer. NFS Most\n  // Wanted reuses its 256 contexts round robin and kicks a new sound before\n  // its input buffers are set; that pass writes nothing and invalidates the\n  // buffer (the game needs that), and the game then reads blocks the decoder\n  // has not written yet. On a context's first use they are zero (a few ms of\n  // silence); on a reused one they still held the previous sound, an engine\n  // fragment of ~50 ms before menu clicks after driving.\n  if (!output_cleared_since_clear_ && data.output_buffer_ptr) {\n    output_cleared_since_clear_ = true;\n    if (uint8_t* output = memory()->TranslatePhysical(data.output_buffer_ptr)) {\n      std::memset(output, 0,\n                  std::min<size_t>(size_t(data.output_buffer_block_count) * kOutputBytesPerBlock,\n                                   kOutputMaxSizeBytes));\n    }\n  }\n\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n"),
+     '#include <rex/audio/xma/helpers.h>\n#include <rex/dbg.h>\n',
+     '#include <rex/audio/xma/helpers.h>\n#include <rex/cvar.h>\n#include <rex/dbg.h>\n'),
     ('src/audio/xma_context.cpp',
      'audio/xma_context.cpp #2',
+     '// https://github.com/koolkdev/libertyv/blob/master/libav_wrapper/xma2dec.c\n\n',
+     '// https://github.com/koolkdev/libertyv/blob/master/libav_wrapper/xma2dec.c\n\n// PARCHE LOCAL - XMA fixes from Xenia Canary\'s XmaContextNew, which this\n// decoder is derived from (commits 09dbe2cd3, 505697f98, 7e98ae6de, 6bef1fbed,\n// 7015473a7, aee0871dd, May-September 2026; BSD, like this file). The NFS\n// Carbon recompilation runs with them. Off = this SDK\'s decoder as it was.\n//  - Starved on input, the output write offset is set back to the read offset\n//    and the buffer invalidated: NFS Most Wanted and Carbon use the write\n//    offset as a stall detector (Canary\'s own comment). This is what\n//    tools/parche_desatasco.py forces from outside after 250 ms.\n//  - A frame is drained completely before the work loop ends (NBA Live 06\'s\n//    menu clicks deadlocked the guest audio thread the same way).\n//  - The output buffer is only reported full when the ring really is full,\n//    and a consume-only pass that leaves it empty invalidates it.\n//  - The packet walk follows a sub-stream\'s own skip chain, and a frame whose\n//    header crosses the packet boundary is counted (it was stepped over).\nREXCVAR_DEFINE_BOOL(xma_canary_fixes, true, "Audio",\n                    "XMA decoder fixes from Xenia Canary (stall detection, frame drain, "\n                    "sub-stream skip chain, split frame headers). false = the SDK\'s decoder as "\n                    "it was");\n\n'),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #3',
+     '\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n\n',
+     "\n  // PARCHE LOCAL - a new stream starts on a silent output buffer. NFS Most\n  // Wanted reuses its 256 contexts round robin and kicks a new sound before\n  // its input buffers are set; that pass writes nothing and invalidates the\n  // buffer (the game needs that), and the game then reads blocks the decoder\n  // has not written yet. On a context's first use they are zero (a few ms of\n  // silence); on a reused one they still held the previous sound, an engine\n  // fragment of ~50 ms before menu clicks after driving.\n  if (!output_cleared_since_clear_ && data.output_buffer_ptr) {\n    output_cleared_since_clear_ = true;\n    if (uint8_t* output = memory()->TranslatePhysical(data.output_buffer_ptr)) {\n      std::memset(output, 0,\n                  std::min<size_t>(size_t(data.output_buffer_block_count) * kOutputBytesPerBlock,\n                                   kOutputMaxSizeBytes));\n    }\n  }\n\n  memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);\n  const bool fixes = REXCVAR_GET(xma_canary_fixes);\n\n"),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #4',
+     '    data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;\n    StoreContextMerged(data, initial_data, context_ptr);\n',
+     '    data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;\n    // PARCHE LOCAL - Canary 7e98ae6de: nothing left to read, so the buffer is\n    // done (fixed a hardlock on boot in 565507E4).\n    if (fixes && output_rb.empty()) {\n      data.output_buffer_valid = 0;\n    }\n    StoreContextMerged(data, initial_data, context_ptr);\n'),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #5',
+     '\n    if (!data.IsAnyInputBufferValid() || data.error_status == 4) {\n      break;\n',
+     "\n    // PARCHE LOCAL - Canary 6bef1fbed: don't abandon a partially consumed\n    // frame. Consume() hands over at most subframe_decode_count blocks per\n    // pass, so the pass that exhausts the input usually leaves the rest of the\n    // frame undelivered; Work() has already cleared is_enabled_ and only\n    // XMAEnableContext sets it again, so a game polling for the remainder\n    // never kicks and nothing else delivers it.\n    if ((!data.IsAnyInputBufferValid() || data.error_status == 4) &&\n        (!fixes || current_frame_remaining_subframes_ == 0)) {\n      break;\n"),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #6',
+     '\n  data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;\n\n  if (output_rb.empty()) {\n    data.output_buffer_valid = 0;\n  }\n',
+     '\n  if (!fixes) {\n    data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;\n    if (output_rb.empty()) {\n      data.output_buffer_valid = 0;\n    }\n  } else {\n    // PARCHE LOCAL - Canary 09dbe2cd3 and 505697f98.\n    if (initial_data.IsAnyInputBufferValid()) {\n      data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;\n    } else {\n      // NFS Carbon and NFS Most Wanted use the write offset as a stall\n      // detector: starved on input, it has to equal the read offset.\n      //\n      // One difference from Canary: when the offsets are already equal,\n      // Canary leaves the buffer valid; here it is invalidated, as this SDK\n      // always did for a pass that wrote nothing. That is the pass NFS Most\n      // Wanted makes when it kicks a reused context before giving it input,\n      // and the silent-buffer note above says the game needs it.\n      data.output_buffer_write_offset = data.output_buffer_read_offset;\n      data.output_buffer_valid = 0;\n    }\n    // The output buffer is full: tell the game. An empty ring with write ==\n    // read means nothing was written, not full, and stays valid.\n    if (remaining_subframe_blocks_in_output_buffer_ == 0 && output_rb.empty()) {\n      data.output_buffer_valid = 0;\n    }\n  }\n'),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #7',
      '  current_frame_remaining_subframes_ = 0;\n  loop_frame_output_limit_ = 0;\n',
      '  current_frame_remaining_subframes_ = 0;\n  output_cleared_since_clear_ = false;\n  loop_frame_output_limit_ = 0;\n'),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #8',
+     '    }\n    next_packet_index++;\n  }\n',
+     "    }\n    if (!REXCVAR_GET(xma_canary_fixes)) {\n      next_packet_index++;\n      continue;\n    }\n    // PARCHE LOCAL - Canary 7015473a7: no frame starts in this packet, it is\n    // all the continuation of a frame split across the boundary. Follow this\n    // packet's own skip count to the next packet of the same sub-stream; the\n    // next packet in sequence can belong to another one, and stepping onto it\n    // merged the two streams.\n    const uint8_t next_skip = xma::GetPacketSkipCount(next_packet);\n    if (next_skip == 0xFF) {\n      break;\n    }\n    next_packet_index += next_skip + 1;\n  }\n"),
+    ('src/audio/xma_context.cpp',
+     'audio/xma_context.cpp #9',
+     '    if (stream.BitsRemaining() < kBitsPerFrameHeader) {\n      break;\n',
+     "    if (stream.BitsRemaining() < kBitsPerFrameHeader) {\n      // PARCHE LOCAL - Canary aee0871dd: this frame's 15-bit header runs into\n      // the next packet, so its size can't be read yet. Count it anyway, or the\n      // caller takes the previous frame for the packet's last and skips past\n      // this one (two frames lost: the next decodes with a stale overlap\n      // window). Size 0 sends it to the split-header path in Decode().\n      if (stream.BitsRemaining() > 0 && REXCVAR_GET(xma_canary_fixes)) {\n        if (stream.offset_bits() == frame_offset) {\n          packet_info.current_frame_ = packet_info.frame_count_;\n          packet_info.current_frame_size_ = 0;\n        }\n        packet_info.frame_count_++;\n      }\n      break;\n"),
     ('include/rex/audio/xma/context.h',
      'xma/context.h #1',
      '  bool carry_valid_ = false;\n  uint8_t pending_output_limit_ = 0;\n',
@@ -774,6 +844,34 @@ BLOQUES = [
      'xam/xam_input.cpp #2',
      '  auto* is = input_system();\n  return is->GetState(actual_user_index, input_state);\n}\n',
      '  auto* is = input_system();\n  const X_RESULT result = is->GetState(actual_user_index, input_state);\n  // PARCHE LOCAL - free camera (NFSMW app/src/freecam.cpp): the game\'s\n  // executable sees every state first (buttons, triggers, sticks) and may\n  // change it; with its free camera on, the camera takes the input and the\n  // game gets none.\n#if defined(_WIN32)\n  using InputFilter = void (*)(uint32_t user_index, int16_t* values);\n  static const InputFilter input_filter = reinterpret_cast<InputFilter>(\n      GetProcAddress(GetModuleHandleW(nullptr), "NfsmwInputFilter"));\n  if (input_filter && result == X_ERROR_SUCCESS && input_state) {\n    auto& pad = input_state->gamepad;\n    int16_t values[7] = {int16_t(uint16_t(pad.buttons)), int16_t(pad.left_trigger),\n                         int16_t(pad.right_trigger),      int16_t(pad.thumb_lx),\n                         int16_t(pad.thumb_ly),           int16_t(pad.thumb_rx),\n                         int16_t(pad.thumb_ry)};\n    input_filter(actual_user_index, values);\n    pad.buttons = uint16_t(values[0]);\n    pad.left_trigger = uint8_t(values[1]);\n    pad.right_trigger = uint8_t(values[2]);\n    pad.thumb_lx = values[3];\n    pad.thumb_ly = values[4];\n    pad.thumb_rx = values[5];\n    pad.thumb_ry = values[6];\n  }\n#endif\n  return result;\n}\n'),
+    ('include/rex/system/function_dispatcher.h',
+     'system/function_dispatcher.h #1',
+     '  mutable std::recursive_mutex dispatch_mutex_;\n};\n',
+     '  mutable std::recursive_mutex dispatch_mutex_;\n\n  // PARCHE LOCAL - serializes interrupt dispatches among themselves (vblank\n  // thread, GPU thread PM4_INTERRUPT) without holding the global critical\n  // region while the guest callback runs. See ExecuteInterrupt.\n  std::mutex interrupt_dispatch_mutex_;\n};\n'),
+    ('src/system/function_dispatcher.cpp',
+     'system/function_dispatcher.cpp #1',
+     '#include <rex/assert.h>\n#include <rex/dbg.h>\n',
+     '#include <rex/assert.h>\n#include <rex/cvar.h>\n#include <rex/dbg.h>\n'),
+    ('src/system/function_dispatcher.cpp',
+     'system/function_dispatcher.cpp #2',
+     '#include <rex/system/thread_state.h>\n\n',
+     '#include <rex/system/thread_state.h>\n\nREXCVAR_DEFINE_BOOL(interrupt_global_lock, false, "CPU",\n                    "Hold the global lock while a guest interrupt callback (vblank, GPU "\n                    "interrupt) runs, as the SDK did. false = interrupts are only serialized "\n                    "among themselves");\n\n'),
+    ('src/system/function_dispatcher.cpp',
+     'system/function_dispatcher.cpp #3',
+     '\n  // Hold the global lock during interrupt dispatch.\n  auto global_lock = global_critical_region_.Acquire();\n\n',
+     "\n  // PARCHE LOCAL - interrupts without the global lock (from the NFS Carbon\n  // recompilation's SDK patch, measured there on the Android Dante's Inferno\n  // port). Interrupt dispatches are serialized against each other, but the\n  // global critical region is no longer held while the guest callback runs:\n  // the callback is arbitrary recompiled game code (the vblank handler at\n  // 60 Hz and more, PM4_INTERRUPT on the GPU thread), and holding the lock for\n  // its whole run made every write-watch fault, kernel object refcount and\n  // audio callback (audio_system.cpp takes the lock per client) wait for it.\n  // Everything the callback reaches that needs the lock (kernel objects, page\n  // watches, DPC lists) acquires it itself. interrupt_global_lock = true puts\n  // the old behaviour back.\n  std::unique_lock<std::mutex> interrupt_lock;\n  std::unique_lock<std::recursive_mutex> global_lock;\n  if (REXCVAR_GET(interrupt_global_lock)) {\n    global_lock = global_critical_region_.Acquire();\n  } else {\n    interrupt_lock = std::unique_lock<std::mutex>(interrupt_dispatch_mutex_);\n  }\n\n"),
+    ('src/core/cvar.cpp',
+     'core/cvar.cpp #1',
+     '  size_t pos = idx_it->second;\n  index.erase(idx_it);\n',
+     "  size_t pos = idx_it->second;\n  // PARCHE LOCAL - a value that came from the command line or the config goes\n  // back to the pending values, so a plugin that is unloaded and loaded again\n  // gets it back. The GPU plugin is: when the factory returns nothing (the\n  // gpu_backend asked for is not built in), LoadGpuPlugin drops the library,\n  // its cvars unregister, and the fallback load (parche_backend.py)\n  // registered them again with their defaults. From the NFS Carbon\n  // recompilation's SDK patch.\n  {\n    const FlagEntry& outgoing = storage[pos];\n    if (outgoing.source == Source::kCommandLine) {\n      GetPendingValuesStorage()[key].cmdline = outgoing.getter();\n    } else if (outgoing.source == Source::kConfig) {\n      GetPendingValuesStorage()[key].config = outgoing.getter();\n    }\n  }\n  index.erase(idx_it);\n"),
+    ('src/system/mmio_handler.cpp',
+     'system/mmio_handler.cpp #1',
+     '  if (!range) {\n    // Recheck if the pages are still protected (race condition - another thread\n',
+     "  if (!range) {\n    // PARCHE LOCAL - cheap write-watch faults (from the NFS Carbon\n    // recompilation's SDK patch). The access violation callback (the GPU's\n    // shared memory write watch) goes first: it looks the page up in a bitmap\n    // and, if it is watched, unprotects it and reports it. That is the common\n    // case. The race check below (another thread already cleared the watch)\n    // uses QueryProtect, which on Linux reads and parses all of\n    // /proc/self/maps per fault (82 % of the game's main thread on a phone);\n    // now it only runs for faults the callback does not recognize. On Windows\n    // QueryProtect is a VirtualQuery and this changes little.\n    if (access_violation_callback_) {\n      auto lock = global_critical_region_.Acquire();\n      if (access_violation_callback_(std::move(lock), access_violation_callback_context_,\n                                     fault_host_address, is_write)) {\n        return true;\n      }\n    }\n    // Recheck if the pages are still protected (race condition - another thread\n"),
+    ('src/system/mmio_handler.cpp',
+     'system/mmio_handler.cpp #2',
+     '      // Another thread has cleared this watch. Abort.\n      return true;\n    }\n    // The address is not found within any range, so either a write watch or an\n    // actual access violation.\n    if (access_violation_callback_) {\n      return access_violation_callback_(std::move(lock), access_violation_callback_context_,\n                                        fault_host_address, is_write);\n    }\n    return false;\n',
+     '      // Another thread has cleared this watch. Abort.\n      return true;\n    }\n    return false;\n'),
 ]
 
 

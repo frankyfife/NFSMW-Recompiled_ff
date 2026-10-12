@@ -312,6 +312,30 @@ if not "!SALIDA!"=="0" (
     goto fin
 )
 
+rem ---------------------------------------------------------------------------
+rem  LLAMADAS DIRECTAS (opcional: set NFSMW_DIRECT_CALLS=1 antes de lanzar esto)
+rem
+rem  tools\direct_calls.py cambia en el C++ generado las llamadas entre
+rem  funciones del juego sin gancho de sub_X (alias debil, nunca en linea) a
+rem  __imp__sub_X, que el compilador puede meter en linea. Viene del port de NFS
+rem  Carbon. Sin la variable se deshace (--undo), asi que quitarla devuelve la
+rem  compilacion normal. Va despues del codegen, que reescribe esos ficheros, y
+rem  antes de compilarlos. Con -DNFSMW_THINLTO=ON (app\CMakeLists.txt) tambien
+rem  entre ficheros. SIN MEDIR todavia en este juego: medir antes de dejarlo.
+rem ---------------------------------------------------------------------------
+if "%NFSMW_DIRECT_CALLS%"=="1" (
+    echo -- Llamadas directas entre funciones del juego --
+    %PY% "%~dp0tools\direct_calls.py"
+) else (
+    %PY% "%~dp0tools\direct_calls.py" --undo
+)
+set "SALIDA=!errorlevel!"
+if not "!SALIDA!"=="0" (
+    popd
+    echo [ERROR] tools\direct_calls.py fallo con codigo !SALIDA!
+    goto fin
+)
+
 echo.
 echo -- Pasada 2: compilar --
 cmake --build --preset win-amd64-release
