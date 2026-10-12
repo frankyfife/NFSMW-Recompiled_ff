@@ -261,7 +261,7 @@ src/audio/sdl/sdl_audio_driver.cpp
     juego recibe sus callbacks (1697 en 10 s).
 
 src/audio/xma_context.cpp
-    FROM THE NFS CARBON RECOMPILATION (untested in this game so far):
+    FROM THE NFS CARBON RECOMPILATION (tested 2026-10-12, see CHANGELOG.md):
     xma_canary_fixes (true): the XMA decoder fixes Xenia Canary made to
     XmaContextNew, which this SDK's decoder is derived from (09dbe2cd3,
     505697f98, 7e98ae6de, 6bef1fbed, 7015473a7, aee0871dd). The first one
@@ -278,16 +278,24 @@ src/audio/xma_context.cpp
     buffer is only reported full when the ring is full, the packet walk
     follows a sub-stream's own skip chain, and a frame whose header crosses
     a packet boundary is counted instead of stepped over. false = the
-    decoder as it was, for A/B.
+    decoder as it was, for A/B. Measured 2026-10-12 with the cut-sound
+    reproduction (tools/audiodiag): clicks that played were clean (45 ms)
+    with the fixes on and off, and no [desatasco] warning appeared in
+    either run. With the fixes on, one run missed 6 of 20 pause menu
+    clicks; with them off, none were missing. Not repeated yet. The user
+    played with the fixes on and noticed nothing wrong.
 
 include/rex/system/function_dispatcher.h
 src/system/function_dispatcher.cpp
-    FROM THE NFS CARBON RECOMPILATION (untested here): interrupt_global_lock
-    (false). Guest interrupt callbacks (vblank, PM4_INTERRUPT) are
+    FROM THE NFS CARBON RECOMPILATION: interrupt_global_lock (false). Guest interrupt callbacks (vblank, PM4_INTERRUPT) are
     serialized among themselves but no longer run holding the global lock,
     which made the audio callbacks ([audio] "waits on the global lock"),
     write-watch faults and kernel object refcounts wait for them. What the
     callback reaches that needs the lock takes it itself. true = as before.
+    Checked 2026-10-12: the guest disables interrupts (mtmsrd r13 = the
+    global lock in the generated code) in 428 places, and every one only
+    wraps an lwarx/stwcx. pair (an interlocked operation). The recompiled
+    stwcx. is a host compare-and-swap, so the lock adds nothing to them.
 
 src/core/cvar.cpp
     FROM THE NFS CARBON RECOMPILATION: a cvar value from the command line or

@@ -43,11 +43,18 @@ without an audio device; a window larger than the screen; and diagnostics
 (`log_guest_fps`, `gpu_capture_frame`, `audio_dump_file`).
 
 Since 2026-10-12 it also carries four changes taken over from the NFS Carbon
-recompilation (same engine, same SDK), none of them tested in this game yet, each with a
-setting to switch it back where it changes behaviour: Xenia Canary's XMA decoder fixes
-(`xma_canary_fixes`, see `parche_desatasco.py` below), interrupts without the global lock
-(`interrupt_global_lock`), cvar values kept when the GPU plugin is loaded a second time
-(the `gpu_backend` fallback), and cheaper write-watch faults on Linux.
+recompilation (same engine, same SDK). Where a change alters behaviour, a setting turns it
+off again:
+
+- Xenia Canary's XMA decoder fixes (`xma_canary_fixes`, see `parche_desatasco.py` below).
+- Interrupts without the global lock (`interrupt_global_lock`).
+- Settings from the command line or the config are kept when the GPU plugin is loaded a
+  second time (the `gpu_backend` fallback).
+- Cheaper write-watch faults on Linux.
+
+They were tested on 2026-10-12; the results are in `CHANGELOG.md`. The user played with
+all four on and noticed nothing wrong. With the XMA fixes on, one muted run missed 6 of
+20 pause menu clicks; that run has not been repeated yet.
 
 How it is maintained:
 
@@ -111,7 +118,9 @@ equivocado— está en [diario/audio-cuelgue.md](diario/audio-cuelgue.md).
 > exactly the signal this patch gives after 250 ms. `parche_ff.py` ports it with the
 > other Canary XMA fixes (`xma_canary_fixes`, on by default). This patch stays as the
 > safety net; if its `[desatasco]` warning no longer appears with the fixes on (and does
-> with `xma_canary_fixes = false`), it can go.
+> with `xma_canary_fixes = false`), it can go. In the cut-sound reproduction of 2026-10-12
+> the warning appeared neither with the fixes on nor with them off. That scene never
+> stalls, so the question is still open.
 
 ### `parche_anillo.py` — instrumentación del XMA
 

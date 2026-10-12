@@ -5,8 +5,23 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 ## [ff fork] - 2026-10-12: fixes from the NFS Carbon recompilation
 
 Taken over from [nfs-carbon-recomp](https://github.com/frankyfife/nfs-carbon-recomp_ff)
-(same engine, same SDK). **Not tested in this game yet**: built into `parche_ff.py` and
-compiled, but not played. Each change that alters behaviour has a setting to turn it off.
+(same engine, same SDK). Each change that alters behaviour has a setting to turn it off.
+
+Tested on Windows on 2026-10-12, with the native renderer:
+
+- **The user played** with all four changes on and noticed nothing wrong.
+- **Two muted runs of the cut-sound reproduction** (`tools/audiodiag/README.txt`), one with
+  `xma_canary_fixes` on and one with it off:
+  - Every click that played lasted 45 ms and was clean.
+  - The `[desatasco]` warning appeared in neither run.
+  - With the fixes on, 6 of the 20 pause menu clicks were missing in that one run; with
+    them off, none were. Not repeated yet, so it is open whether the fixes or the menu
+    timing caused it.
+- **`interrupt_global_lock = false` was checked against the game's code.** All 428 places
+  where NFS Most Wanted disables interrupts are interlocked operations (one
+  `lwarx`/`stwcx.` pair). The recompiled `stwcx.` is a host compare-and-swap, so those
+  places stay atomic without the lock.
+- **`direct_calls.py` and `NFSMW_THINLTO`** have not been measured yet.
 
 ### Added
 
