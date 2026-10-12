@@ -227,6 +227,57 @@ inclusive):
   renderer draws each scene once and replaces the per-tile resolves with one
   resolve each.
 
+## Stage 1 follow-up: no shader constant bypasses the shadow (2026-10-03)
+
+Stage 1 compared one frame while driving. The Simpsons Game Recompiled
+(same SDK, a later XDK) reads the command stream instead of the device
+shadow, because there constants reach the GPU without passing the shadow:
+shader literals through `LOAD_ALU_CONSTANT`, `GpuBeginShaderConstantF4` and
+inline `SET_CONSTANT`. Checked statically for NFSMW, in the instruction
+comments of the whole D3D library (`0x8258E5E0`–`0x825A9858`: type-3 headers
+built with `lis` + `ori`/`addi`) and in the unpacked image:
+
+- **XDK:** 2.0.2135 (static libraries in the XEX header), D3D linked as
+  `D3D9LTCG`. 521 of the library's 772 functions have no direct caller.
+- **`LOAD_ALU_CONSTANT`:** no packet with opcode `0x2F` is built anywhere in
+  the library.
+- **Inline `SET_CONSTANT`:** three sites, all predicated by the tile bin
+  masks, all render registers, none a shader constant. The native renderer
+  replaces tiling, resolves and ZPD, so none of them concerns it.
+
+| Function | Register | Purpose |
+|---|---|---|
+| `sub_825A3AF0` (shader bind) | `RB_MODECONTROL` (`0x2208`) | depth only for bin mask `0x55555555` (the lower bit of each tile's pair); the shadow keeps its value |
+| `sub_82592538` (Resolve) | `RB_COPY_DEST_BASE` (`0x2319`) | resolve destination per tile |
+| `sub_8258EA28` (occlusion query) | `RB_SAMPLE_COUNT_ADDR` (`0x2325`) | ZPD address per tile |
+
+- **`GpuBeginShaderConstantF4`:** `sub_8259B090` is its counterpart. It
+  writes a type-0 packet to `0x4000 + 0x400 × pixel shader + 4 × first
+  constant` into the command buffer, returns the pointer to its data and
+  clears the float constants' dirty bits (device +16/+24): the shadow would
+  stay stale and the recorder would miss the values. **It is never reached:**
+  no `bl` or `b` to it, its address is not built in code, and in the unpacked
+  image it appears only in `.pdata` (4440 of the 22679 functions appear as
+  pointers in `.rdata`/`.data`, none of the D3D library). Its neighbours
+  `sub_8259B080`, `sub_8259B088` and `sub_8259B1C0` (the last two an empty
+  `blr`) are unreferenced too.
+- The only other writer of float constants into the command buffer,
+  `sub_825A2C58` (type-0 packets from the shadow at +1920/+6016), is called
+  only by the flush `sub_825A40C0`.
+
+**Conclusion:** for NFSMW the device shadow is the complete source of the
+shader constants. What bypasses it are fetch constants of draws the native
+renderer handles its own way: the UP draws' slot 31 (above) and fetch
+constant 0 written directly by the resolve `sub_82592538` and by
+`sub_825A9068` (type-0 header `0x00054800`).
+
+**Unpacking the XEX:** `default.xex` is AES-encrypted and LZX-compressed.
+`_ref\xex_unpack\` next to the repository (not in it) holds `xex_unpack.py`,
+which decrypts and de-blocks like the SDK's `XexModule::ReadImageCompressed`,
+and `unlzx.c`, which decompresses with the SDK's libmspack `lzxd.c` (built
+with MinGW gcc). The result, `_ref\default_xex_image.bin`, is the 13 MB image
+loaded at `0x82000000`: game data, kept out of the repository.
+
 ## Stage 2 result: the resources of a frame (2026-10-01)
 
 **Setup:** the capture now has the following additions.
