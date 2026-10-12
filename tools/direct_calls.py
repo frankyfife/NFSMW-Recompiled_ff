@@ -36,7 +36,8 @@ __imp__sub_X calls of their own, only the ones this script writes.
 
 Run it between the codegen and the compile; CONSTRUIR.bat does that when
 NFSMW_DIRECT_CALLS=1 is set and runs --undo otherwise, so switching it off
-gives the plain build back. Measure before keeping it on: the Carbon numbers
+gives the plain build back. Measured on this game 2026-10-12 (CHANGELOG.md):
+no measurable gain on Windows, with or without ThinLTO, so it stays off. The Carbon numbers
 are for ARM phones, not for this game on x86-64.
 """
 

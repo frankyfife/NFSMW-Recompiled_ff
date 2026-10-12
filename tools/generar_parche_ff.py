@@ -57,6 +57,7 @@ FICHEROS = [
     "src/system/function_dispatcher.cpp",
     "src/core/cvar.cpp",
     "src/system/mmio_handler.cpp",
+    "CMakeLists.txt",
 ]
 NUEVOS = ["include/rex/graphics/frame_pacer.h"]
 
@@ -71,7 +72,8 @@ def linea_base(tmp):
     os.makedirs(sdk_tmp)
     tar = os.path.join(tmp, "head.tar")
     with open(tar, "wb") as fh:
-        subprocess.run(["git", "-C", SDK, "archive", "HEAD", "src", "include"], stdout=fh,
+        subprocess.run(["git", "-C", SDK, "archive", "HEAD", "src", "include",
+                        "CMakeLists.txt"], stdout=fh,
                        check=True)
     with tarfile.open(tar) as t:
         t.extractall(sdk_tmp)

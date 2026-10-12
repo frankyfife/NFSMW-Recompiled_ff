@@ -310,6 +310,14 @@ src/system/mmio_handler.cpp
     does not recognize. On Linux QueryProtect parses /proc/self/maps per
     fault; on Windows it is a VirtualQuery and this changes little.
 
+CMakeLists.txt
+    Release builds on Windows get line tables (-gline-tables-only) and a
+    PDB (/DEBUG, with /OPT:REF and /OPT:ICF kept), so build/nfsmw_crash.log
+    names the SDK's functions and lines. Without them a crash in
+    XamContentCreate (2026-10-12) showed only the nearest exports, all of
+    them unrelated. The DLLs come out the same size; line tables do not
+    change the code.
+
 Este fichero lo genera tools/generar_parche_ff.py: la linea base es el SDK
 de git con los demas parche_*.py aplicados en el orden de CONSTRUIR.bat.
 """
@@ -880,6 +888,10 @@ BLOQUES = [
      'system/mmio_handler.cpp #2',
      '      // Another thread has cleared this watch. Abort.\n      return true;\n    }\n    // The address is not found within any range, so either a write watch or an\n    // actual access violation.\n    if (access_violation_callback_) {\n      return access_violation_callback_(std::move(lock), access_violation_callback_context_,\n                                        fault_host_address, is_write);\n    }\n    return false;\n',
      '      // Another thread has cleared this watch. Abort.\n      return true;\n    }\n    return false;\n'),
+    ('CMakeLists.txt',
+     'CMakeLists.txt #1',
+     '    -fno-char8_t\n)\n\n# Platform detection (supports AMD64 and ARM64)\n',
+     '    -fno-char8_t\n)\n\n# PARCHE LOCAL - line tables and a PDB in Release on Windows, so the crash log\n# (build/nfsmw_crash.log) names the SDK\'s functions and lines. Without them the\n# stack only named the nearest export and pointed to unrelated code. Line\n# tables do not change the generated code; /OPT:REF and /OPT:ICF, which /DEBUG\n# turns off by default, are put back.\nif(WIN32)\n    add_compile_options($<$<CONFIG:RELEASE>:-gline-tables-only>)\n    add_link_options("$<$<CONFIG:RELEASE>:LINKER:/DEBUG,/OPT:REF,/OPT:ICF>")\nendif()\n\n# Platform detection (supports AMD64 and ARM64)\n'),
 ]
 
 

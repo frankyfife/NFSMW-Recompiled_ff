@@ -100,8 +100,8 @@ endif()
 # --gpu_plugin ya no hace falta; se puede seguir pasando para cambiarlo.
 rexglue_setup_target(nfsmw GPU_PLUGINS xenos)
 
-# ThinLTO over the game code and the app (off by default, not measured on this
-# game yet). With tools/direct_calls.py applied (CONSTRUIR.bat with
+# ThinLTO over the game code and the app (off by default: measured 2026-10-12,
+# no measurable gain on Windows, see CHANGELOG.md). With tools/direct_calls.py applied (CONSTRUIR.bat with
 # NFSMW_DIRECT_CALLS=1), calls between unhooked game functions go to
 # __imp__sub_X and can then be inlined across the 131 generated files, not only
 # within one. The NFS Carbon recompilation builds its Android library this way.

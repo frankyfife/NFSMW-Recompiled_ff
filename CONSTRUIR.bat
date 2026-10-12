@@ -321,7 +321,8 @@ rem  __imp__sub_X, que el compilador puede meter en linea. Viene del port de NFS
 rem  Carbon. Sin la variable se deshace (--undo), asi que quitarla devuelve la
 rem  compilacion normal. Va despues del codegen, que reescribe esos ficheros, y
 rem  antes de compilarlos. Con -DNFSMW_THINLTO=ON (app\CMakeLists.txt) tambien
-rem  entre ficheros. SIN MEDIR todavia en este juego: medir antes de dejarlo.
+rem  entre ficheros. Medido 2026-10-12: sin ganancia medible (361 -> 363 fps
+rem  conduciendo, con ThinLTO 365, dentro del ruido); por eso va apagado.
 rem ---------------------------------------------------------------------------
 if "%NFSMW_DIRECT_CALLS%"=="1" (
     echo -- Llamadas directas entre funciones del juego --

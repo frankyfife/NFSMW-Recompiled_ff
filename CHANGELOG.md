@@ -21,7 +21,21 @@ Tested on Windows on 2026-10-12, with the native renderer:
   where NFS Most Wanted disables interrupts are interlocked operations (one
   `lwarx`/`stwcx.` pair). The recompiled `stwcx.` is a host compare-and-swap, so those
   places stay atomic without the lock.
-- **`direct_calls.py` and `NFSMW_THINLTO`** have not been measured yet.
+- **`direct_calls.py` and `NFSMW_THINLTO` bring nothing measurable here**, so both stay
+  off. Measured with the native renderer, V-Sync off and no frame limit, on the same
+  key script, at autonav's default 720p (fps):
+
+  | Build | Menu | Driving (mean of 11 ten-second windows) |
+  |---|---|---|
+  | Plain | 650 | 361 (321-397) |
+  | Direct calls (109,552 calls made direct) | 650 | 363 |
+  | Direct calls + ThinLTO | 650 | 365 |
+
+  The differences are within the spread between windows.
+- **SDK crash stacks are readable again.** `parche_ff.py` now gives the SDK's Release
+  build line tables and a PDB on Windows. Before, `build/nfsmw_crash.log` named only
+  the nearest exports, and all of them pointed to unrelated code. The DLLs come out the
+  same size.
 
 ### Added
 
