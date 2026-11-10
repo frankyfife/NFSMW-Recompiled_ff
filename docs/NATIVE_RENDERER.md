@@ -921,7 +921,8 @@ unchanged frames):
 
 Testing with the movies on, without touching the player's folder:
 `D:\NFSMW\_test\game_root_movies` holds junctions to `build\game_root\NFS`
-and to `Movies.bak` (as `Movies`) and a hard link to `default.xex`.
+and `build\game_root\Movies` (`Movies.bak` until the movies were switched
+back on later that day) and a hard link to `default.xex`.
 `autonav.ps1 -GameRoot <folder>` starts the game from there. Keep such
 junctions out of `%TEMP%`, because Windows' temp cleanup could follow them.
 

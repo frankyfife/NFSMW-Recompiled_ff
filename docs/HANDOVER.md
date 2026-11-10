@@ -74,10 +74,12 @@ New since 2026-10-12 (English):
 - **Measuring uncapped:** pass `--vsync=false`, otherwise V-Sync caps at the display's 120 Hz.
 - **Test saves:** Windows' temp cleanup empties `%TEMP%\claude\nfsmw_testuser` now and then (folders kept, files gone), and the game then crashes loading a profile. Since 2026-11-10 `autonav.ps1` copies the saves again when that happens.
 - **Videos (2026-11-10):** the native renderer showed the movies frozen on
-  their first picture; this is fixed. The player's `build\game_root` has
-  `Movies` renamed to `Movies.bak`, which switches off the story movies too.
-  `D:\NFSMW\_test\game_root_movies` (junctions) and `autonav.ps1 -GameRoot`
-  test with the movies on. See "Videos" in `docs/NATIVE_RENDERER.md`.
+  their first picture; this is fixed. The player had `build\game_root\Movies`
+  renamed to `Movies.bak`, which switched off the story movies too. It is
+  `Movies` again since 2026-11-10, at the user's request. Test runs that
+  should not show the intro can run from another game folder with
+  `autonav.ps1 -GameRoot`. `D:\NFSMW\_test\game_root_movies` holds junctions
+  to the same data. See "Videos" in `docs/NATIVE_RENDERER.md`.
 - **`vpkuhus` probe (2026-11-10):** the four functions with the codegen bug
   were not called in menu, free roam, pause or the intro movies, so the fix
   is not urgent.
