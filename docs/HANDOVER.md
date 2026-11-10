@@ -1,4 +1,4 @@
-# Übergabe: NFSMW-Recompiled_ff (Stand 2026-10-03)
+# Übergabe: NFSMW-Recompiled_ff (Stand 2026-11-10)
 
 Für eine neue Claude-Sitzung (anderes Konto). Zuerst diese Datei lesen, dann `tools/parche_ff.py` (Kopf-Doku), `tools/audiodiag/README.txt` und `README.md`.
 For the native renderer also read the status box at the top of `docs/NATIVE_RENDERER.md`; the free camera is in `docs/FREECAM.md`.
@@ -15,7 +15,7 @@ For the native renderer also read the status box at the top of `docs/NATIVE_REND
   - Autor: `-c user.name=frankyfife -c user.email=16177808+frankyfife@users.noreply.github.com`
   - Die Commit-Nachricht endet mit `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
   - Commit-Texte als Datei übergeben (`git commit -F datei`), weil PowerShell bei Anführungszeichen streikt.
-  - Letzter Commit: 63684bb (step 1 measured on Windows; review fixes around the native takeover, among them the occlusion query leak). `windows-qt-launcher-and-fixes` = `origin/main`.
+  - Everything is pushed; `windows-qt-launcher-and-fixes` = `origin/main` (see `git log`). The cloud branches `claude/pending-emulation-elements-cc5040` and `claude/friendly-allen-gpkvzq` are merged.
   - Fork of madelrandel-blip/NFSMW-Recompiled, first fork commit 2026-09-29.
 
 ## Arbeitsweise und Wünsche des Nutzers
@@ -33,7 +33,8 @@ For the native renderer also read the status box at the top of `docs/NATIVE_REND
 Die Hilfsskripte liegen in `tools/dev/`. Sie setzen `tools\_entorno_vs.bat` voraus (clang++ mit MSVC-ABI, Ninja Multi-Config).
 
 - **SDK und Spiel normal:** `tools\dev\sdkbuild.bat` (SDK `--target install`, danach das Spiel).
-- **SDK mit Debug-Symbolen** (für den Profiler, aktuell eingespielt): `tools\dev\profbuild.bat`. Baut nur `rexgpu-xenos` und `rexruntime` nach `rexglue-sdk\out\win-amd64\Release\`.
+- **SDK debug symbols:** since 2026-10-12 the normal Release build writes PDBs with line tables (`parche_ff.py`, SDK `CMakeLists.txt`), so `build\nfsmw_crash.log` and the profiler name the SDK's functions. `tools\dev\profbuild.bat` is no longer needed for that.
+- **`tools\dev\sdkbuild.bat`:** its game step fails ("Could not read presets", it runs at the repository root); build the game with `tools\dev\gamebuild.bat` afterwards.
 - **Einspielen:** `rexgpu-xenos.dll/.pdb` und `rexruntime.dll/.pdb` von dort nach `build\` kopieren. Nur wenn kein `nfsmw.exe` läuft.
 - **After applying a new `parche_ff.py`:** rebuild the SDK **and** the game (`fpscr.h` is inline in the generated code, so an SDK-only build is not enough), then copy the new `nfsmw.exe`, `rexruntime.dll` and `rexgpu-xenos.dll` into `build\`.
 - **Spiel-EXE:** `tools\dev\gamebuild.bat`, danach `app\out\build\win-amd64-release\nfsmw.exe` nach `build\` kopieren.
@@ -59,7 +60,20 @@ Die Hilfsskripte liegen in `tools/dev/`. Sie setzen `tools\_entorno_vs.bat` vora
   - Cvars der GPU-DLL gehen als `--name=wert` auf die Kommandozeile oder in die `nfsmw.toml`. Toml-Werte für spät registrierte Cvars werden nachgereicht.
   - Der Launcher übergibt fast alles per Kommandozeile, und Kommandozeile schlägt toml.
 
-## Was dieser Fork schon kann (alles committet, Stand 2026-10-03)
+## Was dieser Fork schon kann (alles committet, Stand 2026-11-10)
+
+New since 2026-10-12 (English):
+
+- **Fixes from the NFS Carbon recompilation** (cloud commit 2eecd3e; tested 8a14b7d; results in `CHANGELOG.md`):
+  - Xenia Canary's XMA decoder fixes (`xma_canary_fixes`, on).
+  - Interrupts without the global lock (`interrupt_global_lock = false`). Checked: all 428 interrupt-disabled places in the game are `lwarx`/`stwcx.` pairs, atomic without the lock.
+  - Cvars survive the GPU plugin being loaded twice.
+  - Cheaper write-watch faults (Linux).
+  - The user played with all of them and noticed nothing wrong. One muted run missed 6 of 20 pause menu clicks with the XMA fixes on; not repeated.
+- **`tools/direct_calls.py` and `NFSMW_THINLTO`** measured: no gain (361 / 363 / 365 fps driving). Both stay off.
+- **Measuring uncapped:** pass `--vsync=false`, otherwise V-Sync caps at the display's 120 Hz.
+- **Test saves:** Windows' temp cleanup empties `%TEMP%\claude\nfsmw_testuser` now and then (folders kept, files gone), and the game then crashes loading a profile. Since 2026-11-10 `autonav.ps1` copies the saves again when that happens.
+- **Deferred by the user:** the frames held back for a stride mismatch (about one per second with sparks and skid marks; see `docs/NATIVE_RENDERER.md`).
 
 New since 2026-10-01 (English):
 
@@ -162,6 +176,13 @@ python tools\audiodiag\envelope.py drv1 <Tastenindex> 220
 
 From "Order proposed" in `docs/NATIVE_RENDERER.md` (step 1 is done and measured):
 
+0. **SDK fixes worth porting** from rexglue-sdk `development` (checked 2026-10-18), not done yet:
+   - `6319e23`: `vpkuhus`/`vpkuwus` corrupt the source when vD aliases it. This hits 5 sites in 4 game functions (`sub_8276D2D8`, `sub_8276D520`, `sub_8276D7A8`, `sub_8276DB80`). Fixing them needs a codegen run.
+   - `bd833a2`: fences for `sync`/`eieio`. The game has 20 `sync` and 17 `eieio`; today they emit nothing, not even a compiler barrier.
+   - `0c7b01a`: leaked kernel objects.
+   - `ee20900`: XAM content results compared wrongly.
+   - `01ac2a3`: saves truncated instead of deleted on overwrite.
+   - The original project (madelrandel-blip) has nothing relevant: an Android port and Vulkan tuning.
 1. Diagnostics for the fences: which, how many per frame, who waits and how long.
 2. Native fences and read pointer with a time-out fallback; then try `native_renderer_copy_draw_data` and `native_renderer_bound_lead` off.
 3. Only then option A (direct submission, bypassing PM4).

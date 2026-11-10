@@ -245,6 +245,7 @@ fork's options.
 | Build broke on a fresh Windows checkout (libmspack symlinks checked out as text, missing first codegen, Clang not on `PATH`) | `bootstrap.ps1` pins the SDK commit and fixes the symlinks, `CONSTRUIR.bat` runs the first codegen, the environment script finds LLVM |
 | "Requires the PAL **Spain** disc" | Built and played with the **German** PAL disc; the language is picked in the launcher |
 | Sound effects (menu clicks, police radio) cut or garbled after driving a while | The XMA decoder handed a reused context's stale buffer to the game; a new sound now starts on a silent buffer ([tools/audiodiag/README.txt](tools/audiodiag/README.txt)) |
+| XMA decoder behind Xenia Canary's: a starved context did not give the stall signal the game waits for, so `parche_desatasco.py` forces it after 250 ms | Canary's decoder fixes, taken over from the NFS Carbon recompilation (`xma_canary_fixes`, on). Played without problems; the 250 ms safety net stays, because no stall occurred in the test scene either way ([CHANGELOG.md](CHANGELOG.md)) |
 | Crash at start without a default audio device (e.g. the TV switched off) | Silent audio output instead |
 | Windowed mode at 225 % display scaling: window larger than the screen, HUD cut off | The window opens inside the usable area of the display |
 
@@ -276,7 +277,8 @@ renderer.
   from the Qt launcher), and
   `tools/measure_frametimes.bat` / `tools/analyze_frametimes.py` for PresentMon and
   CapFrameX captures.
-- Host crashes write a symbolized stack to `nfsmw_crash.log` next to the game.
+- Host crashes write a symbolized stack to `nfsmw_crash.log` next to the game, with function
+  names and lines for the game and, since 2026-10-12, for the SDK's DLLs too.
 
 ---
 

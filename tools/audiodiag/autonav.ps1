@@ -81,11 +81,22 @@ $log = "$env:TEMP\claude\nav_$Name.log"
 # The game's saves (profiles) of the tests live apart from the player's
 # (Documents\nfsmw): a copy of them, made once. Key sequences that create or
 # change a profile then never touch the player's.
-if (-not (Test-Path $UserData)) {
+# Windows' temp cleanup empties the default copy now and then: it keeps the
+# profile folders and deletes the files in them, and the game then crashed
+# loading a profile (2026-10-12). The default copy is made again when its
+# profile folders hold no files; a -UserData of a test's own is left as it is.
+$saves = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'nfsmw'
+$stale = $false
+if ($UserData -eq "$env:TEMP\claude\nfsmw_testuser" -and (Test-Path $UserData)) {
+  $profiles = @(Get-ChildItem $UserData -Directory -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Parent.Name -eq '00000001' -and $_.Parent.Parent.Name -ne 'Headers' })
+  $stale = $profiles.Count -gt 0 -and
+    -not ($profiles | Where-Object { Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue })
+}
+if ($stale -or -not (Test-Path $UserData)) {
   New-Item -ItemType Directory -Force $UserData | Out-Null
-  $saves = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'nfsmw'
   Get-ChildItem $saves -Directory | Where-Object { $_.Name -notmatch '^(cache|_backup)' } |
-    ForEach-Object { Copy-Item $_.FullName -Destination $UserData -Recurse }
+    ForEach-Object { Copy-Item $_.FullName -Destination $UserData -Recurse -Force }
 }
 $a = @('--game_data_root', "$b\game_root", "--user_data_root=$UserData", '--gpu_plugin', 'xenos',
        "--fullscreen=$(-not $Windowed)".ToLower(),
