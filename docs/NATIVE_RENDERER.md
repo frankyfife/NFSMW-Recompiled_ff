@@ -881,6 +881,50 @@ the track streamer's loaded sections and the precomputed visible sections
 (`TrackStreamer`, `VisibleSectionManager`), data of the track, not a
 distance in the code.
 
+## Videos (2026-11-10)
+
+The movies (EA logo, intro, story movies, tutorials) stood still on their
+first picture with the native renderer. The GPU emulation played them. The
+user had the movies switched off (`game_root\Movies` renamed to
+`Movies.bak`), so this showed up only on 2026-11-10.
+
+**Cause.** The video decoder writes each picture into the same textures,
+and it is already writing the next picture while the current one is shown.
+`GetTexture` takes a change of texture memory only once it sees the same
+new content again a frame later. That rule came in on 2026-10-02 against
+half-written streamed textures (white flashes). A video texture never shows
+the same content twice, so it was never loaded again. The log said:
+`903 changes seen, 0 textures loaded again` in 10 s of the intro.
+
+**Fix.** A texture whose memory shows yet another content at 3 checks in a
+row counts as dynamic, and from then on every change is taken at once, as
+the GPU emulation does. A video is several textures, a brightness plane and
+colour planes. A texture that changes within 2 frames of another one turning
+dynamic turns dynamic at once. Without that, the planes came from different
+pictures for a moment: with a limit of 8 checks the intro started pink, then
+grey, and its first pictures hung. The 10 s log line now also counts the
+textures `found rewritten all the time`.
+
+**Measured** (intro recorded with ddagrab, then frame sheets and runs of
+unchanged frames):
+
+- **Before:** the first picture for 25 s.
+- **Fix:** plays like the GPU emulation, with no pink or grey start. The
+  longest runs of unchanged frames, 40-50 frames, are the same in both
+  recordings: they are the black cuts in the movie itself. 18 textures
+  turned dynamic in the first 10 s of the intro.
+- **Driving** (same key script as the glitch runs):
+  - No texture turned dynamic.
+  - 3 texture changes taken the usual way.
+  - No one-frame glitch: the largest flagged frame, 1949 pixels, is dust and
+    motion. The white flashes were 8000 pixels and more.
+
+Testing with the movies on, without touching the player's folder:
+`D:\NFSMW\_test\game_root_movies` holds junctions to `build\game_root\NFS`
+and to `Movies.bak` (as `Movies`) and a hard link to `default.xex`.
+`autonav.ps1 -GameRoot <folder>` starts the game from there. Keep such
+junctions out of `%TEMP%`, because Windows' temp cleanup could follow them.
+
 ## What the GPU emulation still does (read from the code, 2026-10-02)
 
 Read from the patched SDK (v0.10.0 with all `tools/parche_*.py`) and

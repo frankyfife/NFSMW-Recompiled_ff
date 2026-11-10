@@ -469,6 +469,8 @@ struct Renderer::HostTexture {
   // A changed memory content seen at the last check, not taken yet: only once
   // the same content is seen at a later frame (see GetTexture).
   uint64_t changed_hash = 0;
+  // Checks in a row that found yet another content (a video, see GetTexture).
+  uint32_t changes_in_a_row = 0;
   // Drawn at the renderer's scale (resolve destinations): shaders get their
   // unnormalized coordinates and sizes scaled.
   bool scaled = false;
@@ -1399,17 +1401,39 @@ Renderer::HostTexture* Renderer::GetTexture(const uint32_t* words, bool for_cube
     // same content is seen again at a later frame; until then the texture as
     // it was (right for the frame being drawn in the freed-memory case, one
     // frame late in the other).
+    //
+    // A texture the game rewrites all the time never shows the same content
+    // twice: the video decoder writes the next picture into it while the
+    // last one is shown. Waiting froze the intro and the story movies on
+    // their first picture (2026-11-10). After kDynamicAfterChanges checks in
+    // a row with yet another content its memory counts as dynamic, and every
+    // change is taken at once from then on, as the GPU emulation does. A
+    // video is several textures (brightness and colour planes); one that
+    // changes within a few frames of another turning dynamic turns dynamic
+    // at once, or the planes came from different pictures for a while (the
+    // video started pink, then grey).
     texture->checked_frame = frame_;
     const uint64_t hash =
         SampledHash(guest_memory_, texture->check_address, texture->check_size);
     if (hash == texture->check_hash) {
       texture->changed_hash = 0;
+      texture->changes_in_a_row = 0;
       return texture;
     }
-    if (hash != texture->changed_hash) {
+    constexpr uint32_t kDynamicAfterChanges = 3;
+    constexpr uint64_t kDynamicNeighbourFrames = 2;
+    const bool dynamic = dynamic_textures_.count(key) != 0;
+    if (!dynamic && hash != texture->changed_hash) {
       texture->changed_hash = hash;
       ++stats_.textures_changes_deferred;
-      return texture;
+      const bool video_starting =
+          last_dynamic_frame_ != 0 && frame_ - last_dynamic_frame_ <= kDynamicNeighbourFrames;
+      if (++texture->changes_in_a_row < kDynamicAfterChanges && !video_starting) {
+        return texture;
+      }
+      dynamic_textures_.insert(key);
+      last_dynamic_frame_ = frame_;
+      ++stats_.textures_dynamic_total;
     }
     release_after_flush_.push_back(texture->resource);
     if (texture->block.heap != UINT32_MAX) {

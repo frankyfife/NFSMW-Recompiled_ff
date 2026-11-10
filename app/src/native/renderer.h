@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <d3d12.h>
@@ -116,6 +117,9 @@ struct RendererStats {
   // Since the start (not reset per frame): texture memory changes seen and
   // not taken yet (see GetTexture), textures loaded again after a change.
   uint64_t textures_changes_deferred = 0, textures_reloaded_total = 0;
+  // Since the start: textures whose memory the game rewrites all the time
+  // (videos), whose changes are taken at once (see GetTexture).
+  uint64_t textures_dynamic_total = 0;
   // Since the start: draws whose recorded vertex data differed from memory
   // when the renderer got to them (each one a glitch before), and the bytes.
   uint64_t draw_data_differed_total = 0, draw_data_differed_bytes_total = 0;
@@ -253,6 +257,7 @@ class Renderer {
     stats_.translations = kept.translations;
     stats_.textures_changes_deferred = kept.textures_changes_deferred;
     stats_.textures_reloaded_total = kept.textures_reloaded_total;
+    stats_.textures_dynamic_total = kept.textures_dynamic_total;
     stats_.draw_data_differed_total = kept.draw_data_differed_total;
     stats_.draw_data_differed_bytes_total = kept.draw_data_differed_bytes_total;
     stats_.draws_stride_mismatch_total = kept.draws_stride_mismatch_total;
@@ -404,6 +409,9 @@ class Renderer {
   std::map<uint64_t, std::unique_ptr<RenderTarget>> render_targets_;
   // By a hash of the fetch constant words that define the data.
   std::unordered_map<uint64_t, std::unique_ptr<HostTexture>> guest_textures_;
+  // Keys of guest_textures_ whose memory is rewritten all the time (videos).
+  std::unordered_set<uint64_t> dynamic_textures_;
+  uint64_t last_dynamic_frame_ = 0;  // frame_ when one last turned dynamic
   std::map<uint32_t, std::unique_ptr<HostTexture>> resolved_;
   std::vector<uint32_t> resolve_order_;
 

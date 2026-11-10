@@ -1069,16 +1069,19 @@ void Parallel::Thread() {
         logged_differed_bytes = s.draw_data_differed_bytes_total;
       }
       {
-        static uint64_t logged_deferred = 0, logged_reloaded = 0;
+        static uint64_t logged_deferred = 0, logged_reloaded = 0, logged_dynamic = 0;
         if (s.textures_changes_deferred != logged_deferred ||
             s.textures_reloaded_total != logged_reloaded) {
           REXLOG_INFO("[native renderer] texture memory in 10 s: {} changes seen, {} textures "
                       "loaded again (a change is only taken once it is seen again a frame "
-                      "later)",
+                      "later), {} textures found rewritten all the time (videos: every "
+                      "change taken)",
                       s.textures_changes_deferred - logged_deferred,
-                      s.textures_reloaded_total - logged_reloaded);
+                      s.textures_reloaded_total - logged_reloaded,
+                      s.textures_dynamic_total - logged_dynamic);
           logged_deferred = s.textures_changes_deferred;
           logged_reloaded = s.textures_reloaded_total;
+          logged_dynamic = s.textures_dynamic_total;
         }
       }
       {

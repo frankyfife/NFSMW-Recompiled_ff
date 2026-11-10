@@ -2,6 +2,31 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 
+## [ff fork] - 2026-11-10
+
+### Fixed
+
+- **Videos with the native renderer.** The intro, story movies and tutorials
+  stood on their first picture. Textures the game rewrites all the time now
+  count as dynamic, and their changes are taken at once. The intro now plays
+  like it does with the GPU emulation, and driving shows no new glitches.
+  Details: [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md), "Videos".
+
+### Added
+
+- `tools/audiodiag/autonav.ps1 -GameRoot <folder>`: test runs from another
+  game folder, for example one with the movies switched on.
+- `autonav.ps1` makes its copy of the saves again when Windows' temp cleanup
+  has emptied it.
+
+### Checked
+
+- The four game functions with an aliased `vpkuhus` (SDK codegen bug,
+  rexglue-sdk `6319e23`: `sub_8276D2D8`, `sub_8276D520`, `sub_8276D7A8` and
+  `sub_8276DB80`, all reached through `sub_8277AB40`) were not called in a
+  measured run of menu, free roam, pause menu and the intro movies. The fix
+  is still worth taking with the next SDK update.
+
 ## [ff fork] - 2026-10-12: fixes from the NFS Carbon recompilation
 
 Taken over from [nfs-carbon-recomp](https://github.com/frankyfife/nfs-carbon-recomp_ff)

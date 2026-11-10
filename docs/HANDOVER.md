@@ -73,6 +73,14 @@ New since 2026-10-12 (English):
 - **`tools/direct_calls.py` and `NFSMW_THINLTO`** measured: no gain (361 / 363 / 365 fps driving). Both stay off.
 - **Measuring uncapped:** pass `--vsync=false`, otherwise V-Sync caps at the display's 120 Hz.
 - **Test saves:** Windows' temp cleanup empties `%TEMP%\claude\nfsmw_testuser` now and then (folders kept, files gone), and the game then crashes loading a profile. Since 2026-11-10 `autonav.ps1` copies the saves again when that happens.
+- **Videos (2026-11-10):** the native renderer showed the movies frozen on
+  their first picture; this is fixed. The player's `build\game_root` has
+  `Movies` renamed to `Movies.bak`, which switches off the story movies too.
+  `D:\NFSMW\_test\game_root_movies` (junctions) and `autonav.ps1 -GameRoot`
+  test with the movies on. See "Videos" in `docs/NATIVE_RENDERER.md`.
+- **`vpkuhus` probe (2026-11-10):** the four functions with the codegen bug
+  were not called in menu, free roam, pause or the intro movies, so the fix
+  is not urgent.
 - **Deferred by the user:** the frames held back for a stride mismatch (about one per second with sparks and skid marks; see `docs/NATIVE_RENDERER.md`).
 
 New since 2026-10-01 (English):

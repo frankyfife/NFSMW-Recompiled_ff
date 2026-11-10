@@ -1,5 +1,5 @@
 ﻿param([string]$Name = 'nav', [string]$Keys = 'E*12', [string[]]$Extra = @(), [switch]$Keep, [switch]$Windowed, [int]$Fps = 60, [string]$Resolution = '720p', [string]$Record = '', [int]$RecordFps = 60,
-      [string]$UserData = "$env:TEMP\claude\nfsmw_testuser")
+      [string]$UserData = "$env:TEMP\claude\nfsmw_testuser", [string]$GameRoot = '')
 # Starts the game muted with the raw audio dump, plays a key script and takes
 # a screenshot. Keys: comma list of <key>*<count>[@<ms gap>], key in
 # E(nter) L(eft) R(ight) U(p) D(own) S(pace) X(Esc) W(ait, count = seconds) P(icture),
@@ -98,7 +98,9 @@ if ($stale -or -not (Test-Path $UserData)) {
   Get-ChildItem $saves -Directory | Where-Object { $_.Name -notmatch '^(cache|_backup)' } |
     ForEach-Object { Copy-Item $_.FullName -Destination $UserData -Recurse -Force }
 }
-$a = @('--game_data_root', "$b\game_root", "--user_data_root=$UserData", '--gpu_plugin', 'xenos',
+# -GameRoot: another game folder, for example one with the movies switched on.
+if (-not $GameRoot) { $GameRoot = "$b\game_root" }
+$a = @('--game_data_root', $GameRoot, "--user_data_root=$UserData", '--gpu_plugin', 'xenos',
        "--fullscreen=$(-not $Windowed)".ToLower(),
        '--resolution', $Resolution, '--guest_vblank_rate=1000', "--frame_pacing_fps=$Fps",
        '--readback_resolve=fast', '--mnk_mode=true', '--log_guest_fps=true', '--audio_mute=true',
